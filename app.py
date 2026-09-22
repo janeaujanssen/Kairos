@@ -1,0 +1,378 @@
+"""
+Layer 4: User Interface - Streamlit web app for the Home EMS Optimizer.
+
+Run with:  streamlit run app.py
+
+Scope: Grid, PV, Home Battery, Home Consumption (per architecture doc's
+"start with Grid, PV, Battery and Home Load"). EV/DHW/Building thermal mass
+are not yet wired in -- the Asset abstraction (assets.py) is already generic
+enough to add them later without touching the optimizer's structure.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import numpy as np
+import streamlit as st
+
+from assets import Source, Storage, Load
+from simulator import (
+    time_axis,
+    simulate_grid_price,
+    simulate_pv_production,
+    simulate_load_demand,
+    with_measured_start,
+)
+from optimizer import Optimizer, OptimizationResult
+from evcc_client import run_evcc_optimization, EVCCResult, DEFAULT_EVCC_URL
+import visualization as viz
+
+st.set_page_config(page_title="Home EMS Optimizer", page_icon="🏠", layout="wide")
+
+# ----------------------------------------------------------------------------
+# Session state defaults
+# ----------------------------------------------------------------------------
+if "result" not in st.session_state:
+    st.session_state.result = None  # type: OptimizationResult | None
+if "evcc_result" not in st.session_state:
+    st.session_state.evcc_result = None  # type: EVCCResult | None
+
+# ----------------------------------------------------------------------------
+# Sidebar
+# ----------------------------------------------------------------------------
+st.sidebar.title("🏠 EMS Optimizer")
+
+with st.sidebar.expander("⚡ Sign convention reference", expanded=False):
+    st.markdown(
+        "- **Grid power**: `+` import, `-` export\n"
+        "- **PV power**: `+` production\n"
+        "- **Battery power**: `+` charge, `-` discharge\n"
+        "- **Load power**: `+` consumption (always ≥ 0)\n\n"
+        "Energy balance: `Grid + PV = Load + Battery` at every timestep."
+    )
+
+st.sidebar.subheader("Strategy")
+peak_leveling = st.sidebar.checkbox(
+    "Peak leveling", value=False,
+    help="Penalize the highest grid power draw to reduce demand charges and grid stress, "
+         "without increasing total cost.",
+)
+charging_priority = st.sidebar.checkbox(
+    "Charging priority", value=False,
+    help="Among equal-cost solutions, prefer charging the battery over exporting excess PV.",
+)
+
+st.sidebar.subheader("Configuration")
+mode_label = st.sidebar.selectbox(
+    "Optimization mode", ["Cost optimization", "Self-consumption"], index=0,
+)
+mode = "cost" if mode_label == "Cost optimization" else "self_consumption"
+
+horizon_hours = st.sidebar.slider("Planning horizon (hours)", min_value=6, max_value=48, value=24, step=1)
+interval_minutes = st.sidebar.selectbox("Time interval (minutes)", [15, 30, 60], index=2)
+start_hour = st.sidebar.slider(
+    "Simulated start time (clock hour, t=0)", min_value=0.0, max_value=23.5,
+    value=float(datetime.now().hour), step=0.5,
+)
+solver_tolerance = st.sidebar.number_input(
+    "Solver tolerance (relative MIP gap)", min_value=1e-12, max_value=1e-2,
+    value=1e-9, format="%.1e",
+)
+max_iterations = st.sidebar.number_input("Max iterations", min_value=10, max_value=100000, value=500, step=10)
+
+st.sidebar.subheader("EVCC optimizer (optional)")
+evcc_enabled = st.sidebar.checkbox("Also run EVCC optimizer for comparison", value=False)
+evcc_url = st.sidebar.text_input("EVCC service URL", value=DEFAULT_EVCC_URL, disabled=not evcc_enabled)
+
+run_clicked = st.sidebar.button("▶ Run optimization", type="primary", width='stretch')
+
+# ----------------------------------------------------------------------------
+# Build time axis + forecasts (shared by Inputs tab display and the optimizer)
+# ----------------------------------------------------------------------------
+hours, dt_hours, n_steps = time_axis(horizon_hours, interval_minutes, start_hour=start_hour)
+
+tab_inputs, tab_optimization = st.tabs(["📥 Inputs", "📊 Optimization"])
+
+# ============================================================================
+# INPUTS TAB
+# ============================================================================
+with tab_inputs:
+    st.header("Sources")
+
+    # --- Grid ---
+    with st.expander("🔌 Grid", expanded=True):
+        st.markdown("**Current state** *(measured, t=0)*")
+        c1, c2 = st.columns(2)
+        grid_current_power = c1.number_input(
+            "Current grid power (kW)", value=0.5, step=0.1, key="grid_current_power",
+            help="Measured import(+)/export(-) power right now. Informational; the optimizer "
+                 "solves for grid power at every step including t=0.",
+        )
+
+        st.markdown("**Constraints**")
+        c1, c2 = st.columns(2)
+        grid_max_import = c1.number_input("Max import power (kW)", value=10.0, min_value=0.0, key="grid_max_import")
+        grid_max_export = c2.number_input("Max export power (kW)", value=8.0, min_value=0.0, key="grid_max_export")
+
+        st.markdown("**Forecast** — dynamic tariff (baseline + morning/evening peaks)")
+        c1, c2, c3 = st.columns(3)
+        price_baseline = c1.number_input("Baseline price (EUR/kWh)", value=0.20, step=0.01, key="price_baseline")
+        price_peak_height = c2.number_input("Peak height (EUR/kWh)", value=0.15, step=0.01, key="price_peak_height")
+        export_price_fraction = c3.slider("Export price (fraction of import)", 0.0, 1.0, 0.5, key="export_fraction")
+        c1, c2 = st.columns(2)
+        price_morning_hour = c1.slider("Morning peak hour", 0.0, 23.5, 8.0, step=0.5, key="price_morning_hour")
+        price_evening_hour = c2.slider("Evening peak hour", 0.0, 23.5, 19.0, step=0.5, key="price_evening_hour")
+
+        price_forecast_full = simulate_grid_price(
+            hours, baseline=price_baseline, morning_peak_hour=price_morning_hour,
+            evening_peak_hour=price_evening_hour, peak_height=price_peak_height,
+        )
+        st.plotly_chart(
+            viz.plot_price_forecast(hours, price_forecast_full, export_price_fraction),
+            width='stretch', key="chart_price_forecast",
+        )
+
+        st.markdown("**Control**")
+        st.caption("None — Sources are not directly controlled; grid power results from the energy balance.")
+
+    # --- PV ---
+    with st.expander("☀️ PV", expanded=True):
+        st.markdown("**Current state** *(measured, t=0)*")
+        pv_current_power = st.number_input("Current PV power (kW)", value=0.0, min_value=0.0, step=0.1, key="pv_current_power")
+
+        st.markdown("**Constraints**")
+        st.caption("— (curtailment not modeled)")
+
+        st.markdown("**Forecast** — bell curve peaking at solar noon")
+        c1, c2, c3 = st.columns(3)
+        pv_peak_power = c1.number_input("Peak production (kW)", value=5.0, min_value=0.0, key="pv_peak_power")
+        pv_sunrise = c2.slider("Sunrise hour", 0.0, 12.0, 6.5, step=0.5, key="pv_sunrise")
+        pv_sunset = c3.slider("Sunset hour", 12.0, 24.0, 20.0, step=0.5, key="pv_sunset")
+
+        pv_forecast_full = simulate_pv_production(hours, peak_power=pv_peak_power, sunrise=pv_sunrise, sunset=pv_sunset)
+        st.plotly_chart(viz.plot_pv_forecast(hours, pv_forecast_full), width='stretch', key="chart_pv_forecast")
+
+        st.markdown("**Control**")
+        st.caption("None — Sources are not directly controlled.")
+
+    st.header("Storage")
+
+    # --- Home Battery ---
+    with st.expander("🔋 Home Battery", expanded=True):
+        st.markdown("**Current state** *(measured, t=0)*")
+        battery_current_soc = st.slider("Current SoC (%)", 0, 100, 50, key="battery_current_soc") / 100.0
+
+        st.markdown("**Constraints**")
+        c1, c2 = st.columns(2)
+        battery_capacity = c1.number_input("Energy capacity (kWh)", value=10.0, min_value=0.1, key="battery_capacity")
+        battery_min_soc, battery_max_soc = c2.slider(
+            "Min / max SoC (%)", 0, 100, (10, 95), key="battery_soc_range",
+        )
+        battery_min_soc, battery_max_soc = battery_min_soc / 100.0, battery_max_soc / 100.0
+        c1, c2 = st.columns(2)
+        battery_max_charge = c1.number_input("Max charge power (kW)", value=3.0, min_value=0.0, key="battery_max_charge")
+        battery_max_discharge = c2.number_input("Max discharge power (kW)", value=3.0, min_value=0.0, key="battery_max_discharge")
+
+        st.markdown("**Forecast**")
+        st.caption("— None; battery behavior is determined entirely by the optimizer.")
+
+        st.markdown("**Control**")
+        st.caption("Battery Charge/Discharge Power (kW) — set by the optimizer.")
+
+    st.header("Loads")
+
+    # --- Home Consumption ---
+    with st.expander("🏠 Home Consumption", expanded=True):
+        st.markdown("**Current state** *(measured, t=0)*")
+        load_current_power = st.number_input("Current load power (kW)", value=0.5, min_value=0.0, step=0.1, key="load_current_power")
+
+        st.markdown("**Constraints**")
+        st.caption("— (fixed demand; not controllable)")
+
+        st.markdown("**Forecast** — baseline + morning/evening peaks")
+        c1, c2 = st.columns(2)
+        load_baseline = c1.number_input("Baseline demand (kW)", value=0.4, min_value=0.0, key="load_baseline")
+        load_peak_height = c2.number_input("Peak height (kW)", value=1.2, min_value=0.0, key="load_peak_height")
+        c1, c2 = st.columns(2)
+        load_morning_hour = c1.slider("Morning peak hour", 0.0, 23.5, 7.0, step=0.5, key="load_morning_hour")
+        load_evening_hour = c2.slider("Evening peak hour", 0.0, 23.5, 19.0, step=0.5, key="load_evening_hour")
+
+        load_forecast_full = simulate_load_demand(
+            hours, baseline=load_baseline, morning_peak_hour=load_morning_hour,
+            evening_peak_hour=load_evening_hour, peak_height=load_peak_height,
+        )
+        st.plotly_chart(viz.plot_load_forecast(hours, load_forecast_full), width='stretch', key="chart_load_forecast")
+
+        st.markdown("**Control**")
+        st.caption("None — fixed load, not controllable in this scope.")
+
+# ----------------------------------------------------------------------------
+# Assemble assets from current widget values (t=0 overridden with measured value)
+# ----------------------------------------------------------------------------
+grid = Source(
+    "Grid", current_power=grid_current_power,
+    max_import_power=grid_max_import, max_export_power=grid_max_export,
+    price_forecast=price_forecast_full, export_price_fraction=export_price_fraction,
+)
+pv = Source(
+    "PV", current_power=pv_current_power,
+    power_forecast=with_measured_start(pv_forecast_full, pv_current_power),
+)
+battery = Storage(
+    "Home Battery", current_soc=battery_current_soc, capacity=battery_capacity,
+    min_soc=battery_min_soc, max_soc=battery_max_soc,
+    max_charge_power=battery_max_charge, max_discharge_power=battery_max_discharge,
+)
+load = Load(
+    "Home Consumption", current_power=load_current_power,
+    power_forecast=with_measured_start(load_forecast_full, load_current_power),
+)
+
+# ----------------------------------------------------------------------------
+# Run optimization (local + optional EVCC) on button click
+# ----------------------------------------------------------------------------
+if run_clicked:
+    with st.spinner("Solving..."):
+        opt = Optimizer(
+            grid, pv, battery, load, hours, dt_hours,
+            mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
+            solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
+        )
+        st.session_state.result = opt.solve()
+
+        if evcc_enabled:
+            st.session_state.evcc_result = run_evcc_optimization(
+                grid, pv, battery, load, dt_hours, base_url=evcc_url,
+            )
+        else:
+            st.session_state.evcc_result = None
+
+# ============================================================================
+# OPTIMIZATION TAB
+# ============================================================================
+with tab_optimization:
+    result = st.session_state.result
+    evcc_result = st.session_state.evcc_result
+
+    if result is None:
+        st.info("Configure your system in the **Inputs** tab, then click **▶ Run optimization** in the sidebar.")
+    else:
+        n_cols = 2 if evcc_result is not None else 1
+        cols = st.columns(n_cols)
+
+        # ---- Local optimizer column ----
+        with cols[0]:
+            st.subheader("Local optimizer")
+
+            st.markdown("**Solver info**")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Type", "MILP (CBC)")
+            s2.metric("Status", result.status)
+            s3.metric("Solve time", f"{result.solve_time * 1000:.0f} ms")
+
+            if result.violations:
+                st.markdown("**Constraint violations**")
+                st.dataframe(
+                    [
+                        {
+                            "Asset": v.asset, "Type": v.type,
+                            "Max violation": round(v.max_violation, 4),
+                            "Penalty cost": round(v.penalty_cost, 2),
+                        }
+                        for v in result.violations
+                    ],
+                    width='stretch', hide_index=True,
+                )
+            else:
+                st.success("No constraint violations.")
+
+            st.markdown("**Cost metrics**")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Energy cost", f"€{result.cost_energy:.2f}")
+            m2.metric("Violation penalty", f"€{result.cost_penalty:.2f}")
+            m3.metric("Total cost", f"€{result.cost_total:.2f}")
+
+            st.markdown("**Current control commands (t=0)**")
+            ctrl = result.control_at_t0()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Battery power", f"{ctrl.get('battery_power_kw', 0):.2f} kW")
+            c2.metric("Grid import", f"{ctrl.get('grid_import_kw', 0):.2f} kW")
+            c3.metric("Grid export", f"{ctrl.get('grid_export_kw', 0):.2f} kW")
+
+            st.plotly_chart(
+                viz.plot_power_flow(
+                    result.hours, result.grid_import, result.grid_export,
+                    result.pv_power, result.battery_power, result.load_power,
+                ),
+                width='stretch', key="chart_power_flow_local",
+            )
+            st.plotly_chart(
+                viz.plot_cost_breakdown(result.cost_energy, result.cost_penalty),
+                width='stretch', key="chart_cost_local",
+            )
+            hours_ext = np.append(result.hours, result.hours[-1] + dt_hours) if len(result.hours) else result.hours
+            st.plotly_chart(
+                viz.plot_soc_trajectory(hours_ext, result.battery_soc, battery_min_soc, battery_max_soc),
+                width='stretch', key="chart_soc_local",
+            )
+
+        # ---- EVCC comparison column ----
+        if evcc_result is not None:
+            with cols[1]:
+                st.subheader("EVCC optimizer")
+                if evcc_result.error:
+                    st.warning(f"EVCC comparison unavailable: {evcc_result.error}")
+                else:
+                    st.markdown("**Solver info**")
+                    e1, e2 = st.columns(2)
+                    e1.metric("Type", "MILP (external service)")
+                    e2.metric("Status", evcc_result.status)
+
+                    if evcc_result.limit_violations:
+                        active = {k: v for k, v in evcc_result.limit_violations.items() if v}
+                        if active:
+                            st.warning(f"Limit violations reported: {', '.join(active.keys())}")
+                        else:
+                            st.success("No limit violations reported.")
+
+                    if evcc_result.objective_value is not None:
+                        st.metric("Objective value", f"{evcc_result.objective_value:.4f}")
+
+                    if len(evcc_result.battery_power):
+                        st.markdown("**Current control commands (t=0)**")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Battery power", f"{evcc_result.battery_power[0]:.2f} kW")
+                        c2.metric("Grid import", f"{evcc_result.grid_import[0]:.2f} kW" if len(evcc_result.grid_import) else "—")
+                        c3.metric("Grid export", f"{evcc_result.grid_export[0]:.2f} kW" if len(evcc_result.grid_export) else "—")
+
+                        st.plotly_chart(
+                            viz.plot_power_flow(
+                                result.hours[: len(evcc_result.battery_power)],
+                                evcc_result.grid_import, evcc_result.grid_export,
+                                result.pv_power[: len(evcc_result.battery_power)],
+                                evcc_result.battery_power,
+                                result.load_power[: len(evcc_result.battery_power)],
+                            ),
+                            width='stretch', key="chart_power_flow_evcc",
+                        )
+                        if len(evcc_result.battery_soc):
+                            st.plotly_chart(
+                                viz.plot_soc_trajectory(
+                                    result.hours[: len(evcc_result.battery_soc)],
+                                    evcc_result.battery_soc, battery_min_soc, battery_max_soc,
+                                    name="EVCC battery SoC",
+                                ),
+                                width='stretch', key="chart_soc_evcc",
+                            )
+                    else:
+                        st.info("EVCC service returned no battery schedule to display.")
+
+            st.divider()
+            st.plotly_chart(
+                viz.plot_comparison_power(
+                    result.hours, result.grid_import, result.grid_export,
+                    evcc_result.grid_import, evcc_result.grid_export,
+                ),
+                width='stretch', key="chart_comparison",
+            )
