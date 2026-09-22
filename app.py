@@ -350,6 +350,7 @@ with tab_optimization:
                             st.success("No limit violations reported.")
 
                     if evcc_result.objective_value is not None:
+                        st.markdown("**Cost metrics**")
                         st.metric("Objective value", f"{evcc_result.objective_value:.4f}")
 
                     if len(evcc_result.battery_power):

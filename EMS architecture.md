@@ -91,6 +91,8 @@ Control setpoints for each asset at each time step. The control interface is def
 $$\text{Grid Interaction} = \sum_{t=0}^{T} (|\text{Grid Import}_{t}| + |\text{Grid Export}_{t}|)$$
 This mode prioritizes using PV locally (charging storage when PV is abundant, discharging to supply load) and minimizes both imports and exports.
 
+**Note on battery oscillation**: If the battery is predicted to reach full capacity at a future timestep, the optimizer should avoid unnecessary charging/discharging cycles and instead keep the battery idle, as any additional charging would be wasted anyway. This is the drawback of Self-consumption optimization.
+
 **Mode 2: Cost optimization** — Minimize total grid energy cost with optional strategies:
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import}_{t} \times \text{Import Price}_{t} - \text{Grid Export}_{t} \times \text{Export Price}_{t})$$
 This mode accounts for time-varying electricity prices and export compensation. When multiple solutions have equal cost, tie-breaking strategies smooth grid interaction:
