@@ -61,14 +61,23 @@ def simulate_load_demand(
     baseline: float = 0.4,
     morning_peak_hour: float = 7.0,
     evening_peak_hour: float = 19.0,
-    peak_height: float = 1.2,
+    ev_peak_hour: float = 23.0,
+    morning_peak_height: float = 1.2,
+    evening_peak_height: float = 1.56,
     peak_width: float = 1.0,
+    ev_peak_height: float = 0.3,
+    baseline_variation: float = 0.05,
 ) -> np.ndarray:
-    """Baseline home consumption plus morning/evening peaks (kW)."""
-    hod = hours % 24
-    morning = peak_height * np.exp(-0.5 * ((hod - morning_peak_hour) / peak_width) ** 2)
-    evening = 1.3 * peak_height * np.exp(-0.5 * ((hod - evening_peak_hour) / peak_width) ** 2)
-    return baseline + morning + evening
+    """Baseline home consumption plus morning/evening/EV peaks (kW) with daily baseline variation."""
+    hod = hours % 24 # array of hours of the day
+    morning = morning_peak_height * np.exp(-0.5 * ((hod - morning_peak_hour) / peak_width) ** 2)
+    evening = evening_peak_height * np.exp(-0.5 * ((hod - evening_peak_hour) / peak_width) ** 2)
+    ev = ev_peak_height * np.exp(-0.5 * ((hod - ev_peak_hour) / peak_width) ** 2)
+    
+    # Add variation to baseline (daily cycle)
+    baseline_var = baseline_variation * np.cos(2 * np.pi * hod / 24.0)
+    
+    return baseline + baseline_var + morning + evening + ev
 
 
 def with_measured_start(forecast: np.ndarray, measured_current_value: float) -> np.ndarray:

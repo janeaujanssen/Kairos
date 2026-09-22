@@ -58,16 +58,115 @@ def plot_power_flow(
     pv_power: np.ndarray,
     battery_power: np.ndarray,
     load_power: np.ndarray,
+    price_import: np.ndarray = None,
+    price_export: np.ndarray = None,
 ) -> go.Figure:
-    """Power flow chart: sources/storage above zero as supply, load as demand line."""
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=hours, y=grid_import, name="Grid import", marker_color="#d62728"))
-    fig.add_trace(go.Bar(x=hours, y=-grid_export, name="Grid export", marker_color="#2ca02c"))
-    fig.add_trace(go.Bar(x=hours, y=pv_power, name="PV production", marker_color="#ff7f0e"))
-    fig.add_trace(go.Bar(x=hours, y=-battery_power, name="Battery (+discharge/-charge shown)", marker_color="#9467bd"))
-    fig.add_trace(go.Scatter(x=hours, y=load_power, mode="lines", name="Load", line=dict(color="#1f77b4", width=3)))
-    fig.update_layout(barmode="relative")
-    return _layout(fig, "Power flow", "kW")
+    """Hybrid power flow chart showing energy balance: Grid + PV = Load + Storage.
+    
+    Supply side (lines): Grid Power (net) and PV Power shown as separate line traces.
+    Demand side (stacked bars): Load Power and Battery Power as separate bar traces.
+    With barmode="relative": same-signed bars stack together (e.g. Load + Battery charging),
+    while discharging Battery (negative) stacks separately below zero.
+    Prices shown as secondary y-axis lines (if provided).
+    """
+    # Calculate net grid power (positive = import, negative = export)
+    net_grid_power = grid_import - grid_export
+    
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # SUPPLY SIDE: Show as lines (easier to see individual trends)
+    fig.add_trace(
+        go.Scatter(
+            x=hours, y=net_grid_power,
+            name="Grid Power",
+            mode="lines",
+            line=dict(color="#d62728", width=2),
+            hovertemplate="<b>Grid Power</b><br>%{y:.2f} kW<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=hours, y=pv_power,
+            name="PV Production",
+            mode="lines",
+            line=dict(color="#ff7f0e", width=2),
+            hovertemplate="<b>PV Production</b><br>%{y:.2f} kW<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    # DEMAND SIDE: Load and Battery as separate stacked bars.
+    # barmode="relative" stacks positive values together and negative values together,
+    # so discharging battery never stacks on top of Load.
+    fig.add_trace(
+        go.Bar(
+            x=hours, y=load_power,
+            name="Home Load",
+            marker=dict(color="#1f77b4"),
+            hovertemplate="<b>Home Load</b><br>%{y:.2f} kW<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=hours, y=battery_power,
+            name="Battery (+charge/-discharge)",
+            marker=dict(color="#9467bd"),
+            hovertemplate="<b>Battery</b><br>%{y:.2f} kW<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    # Optional: Add price traces on secondary y-axis if provided
+    if price_import is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=hours, y=price_import,
+                name="Import Price",
+                mode="lines",
+                line=dict(color="#d62728", width=1, dash="dot"),
+                hovertemplate="<b>Import Price</b><br>%{y:.3f} €/kWh<extra></extra>",
+            ),
+            secondary_y=True
+        )
+    
+    if price_export is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=hours, y=price_export,
+                name="Export Price",
+                mode="lines",
+                line=dict(color="#2ca02c", width=1, dash="dot"),
+                hovertemplate="<b>Export Price</b><br>%{y:.3f} €/kWh<extra></extra>",
+            ),
+            secondary_y=True
+        )
+    
+    # Create layout with dual y-axes if prices provided
+    layout_update = {
+        "title": "Power Flow (Energy Balance: Grid + PV = Load + Storage)",
+        "xaxis_title": "Time (h)",
+        "barmode": "relative",
+        "height": 400,
+        "margin": dict(l=40, r=20, t=40, b=40),
+        "legend": dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        "hovermode": "x unified",
+    }
+    
+    # Configure y-axes
+    layout_update["yaxis"] = dict(title="Power (kW)", side="left")
+    if price_import is not None or price_export is not None:
+        layout_update["yaxis2"] = dict(title="Price (€/kWh)", overlaying="y", side="right")
+    
+    fig.update_layout(**layout_update)
+    
+    # Add a zero line to visually emphasize the balance
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(128, 128, 128, 0.3)", line_width=1)
+    
+    return fig
 
 
 def plot_soc_trajectory(
@@ -76,24 +175,134 @@ def plot_soc_trajectory(
     min_soc: float,
     max_soc: float,
     name: str = "Battery SoC",
+    additional_socs: dict = None,
 ) -> go.Figure:
+    """Plot state of charge trajectories for storage assets.
+    
+    Args:
+        hours_extended: Time array (includes t=0 through t=T)
+        soc: Primary storage SoC array (normalized 0-1)
+        min_soc: Minimum SoC limit for primary storage
+        max_soc: Maximum SoC limit for primary storage
+        name: Name of primary storage asset
+        additional_socs: Optional dict of {asset_name: (soc_array, min_soc, max_soc)}
+    """
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hours_extended, y=soc * 100, mode="lines+markers", name=name, line=dict(color="#9467bd")))
-    fig.add_hline(y=min_soc * 100, line_dash="dot", line_color="red", annotation_text="min SoC")
-    fig.add_hline(y=max_soc * 100, line_dash="dot", line_color="red", annotation_text="max SoC")
-    fig.update_yaxes(range=[-5, 105])
-    return _layout(fig, "State of charge trajectory", "SoC (%)")
-
-
-def plot_cost_breakdown(cost_energy: float, cost_penalty: float) -> go.Figure:
-    fig = go.Figure(
-        go.Bar(
-            x=["Energy cost", "Violation penalty", "Total"],
-            y=[cost_energy, cost_penalty, cost_energy + cost_penalty],
-            marker_color=["#1f77b4", "#d62728", "#7f7f7f"],
+    
+    # Color palette for multiple storage assets
+    colors = ["#9467bd", "#ff7f0e", "#2ca02c", "#d62728", "#1f77b4"]
+    
+    # Plot primary storage
+    fig.add_trace(
+        go.Scatter(
+            x=hours_extended, y=soc * 100, mode="lines+markers",
+            name=name, line=dict(color=colors[0], width=2),
+            hovertemplate="<b>" + name + "</b><br>%{y:.1f}%<extra></extra>",
         )
     )
-    return _layout(fig, "Cost breakdown", "EUR", xaxis_title="")
+    fig.add_hline(y=min_soc * 100, line_dash="dot", line_color=colors[0],
+                  annotation_text=f"{name} min", annotation_position="right")
+    fig.add_hline(y=max_soc * 100, line_dash="dot", line_color=colors[0],
+                  annotation_text=f"{name} max", annotation_position="right")
+    
+    # Plot additional storage assets if provided
+    if additional_socs:
+        for i, (asset_name, (asset_soc, asset_min, asset_max)) in enumerate(additional_socs.items(), 1):
+            color = colors[i % len(colors)]
+            fig.add_trace(
+                go.Scatter(
+                    x=hours_extended, y=asset_soc * 100, mode="lines+markers",
+                    name=asset_name, line=dict(color=color, width=2),
+                    hovertemplate="<b>" + asset_name + "</b><br>%{y:.1f}%<extra></extra>",
+                )
+            )
+            fig.add_hline(y=asset_min * 100, line_dash="dot", line_color=color,
+                          annotation_text=f"{asset_name} min", annotation_position="right")
+            fig.add_hline(y=asset_max * 100, line_dash="dot", line_color=color,
+                          annotation_text=f"{asset_name} max", annotation_position="right")
+    
+    fig.update_yaxes(range=[-5, 105])
+    
+    fig.update_layout(
+        title="State of Charge Trajectories",
+        xaxis_title="Time (h)",
+        yaxis_title="SoC (%)",
+        margin=dict(l=40, r=20, t=40, b=40),
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+    )
+    
+    return fig
+
+
+
+
+def plot_cost_analysis(
+    hours: np.ndarray,
+    grid_import: np.ndarray,
+    grid_export: np.ndarray,
+    price_import: np.ndarray,
+    price_export: np.ndarray,
+) -> go.Figure:
+    """Plot cost analysis: per-interval cost bars + cumulative cost line with profit/loss indication.
+    
+    Args:
+        hours: Time array
+        grid_import: Grid import power per interval (kW)
+        grid_export: Grid export power per interval (kW)
+        price_import: Import price per interval (€/kWh)
+        price_export: Export price per interval (€/kWh)
+    """
+    # Calculate cost per interval (€)
+    # Positive = cost (importing), Negative = profit (exporting)
+    cost_per_interval = (grid_import * price_import) - (grid_export * price_export)
+    cumulative_cost = np.cumsum(cost_per_interval)
+    
+    # Create figure with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Bar chart for per-interval cost (colored by profit/loss)
+    colors = ["#d62728" if c > 0 else "#2ca02c" for c in cost_per_interval]
+    fig.add_trace(
+        go.Bar(
+            x=hours, y=cost_per_interval,
+            name="Cost per interval",
+            marker=dict(color=colors),
+            hovertemplate="<b>Cost per interval</b><br>€%{y:.2f}<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    # Line chart for cumulative cost (always blue)
+    fig.add_trace(
+        go.Scatter(
+            x=hours, y=cumulative_cost,
+            name="Cumulative cost",
+            mode="lines",
+            line=dict(color="#1f77b4", width=2),
+            hovertemplate="<b>Cumulative cost</b><br>€%{y:.2f}<extra></extra>",
+        ),
+        secondary_y=True
+    )
+    
+    # Add zero line for reference
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(128, 128, 128, 0.3)", line_width=1)
+    
+    fig.update_layout(
+        title="Cost Analysis (Red=Cost, Green=Profit)",
+        xaxis_title="Time (h)",
+        margin=dict(l=40, r=20, t=40, b=40),
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+    )
+    
+    fig.update_yaxes(title_text="Cost per Interval (€)", secondary_y=False)
+    fig.update_yaxes(title_text="Cumulative Cost (€)", secondary_y=True)
+    
+    return fig
+
 
 
 def plot_comparison_power(

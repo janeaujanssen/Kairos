@@ -43,6 +43,10 @@ if "evcc_result" not in st.session_state:
 # ----------------------------------------------------------------------------
 st.sidebar.title("🏠 EMS Optimizer")
 
+run_clicked = st.sidebar.button("▶ Run optimization", type="primary", width='stretch')
+
+st.sidebar.divider()
+
 with st.sidebar.expander("⚡ Sign convention reference", expanded=False):
     st.markdown(
         "- **Grid power**: `+` import, `-` export\n"
@@ -70,10 +74,10 @@ mode_label = st.sidebar.selectbox(
 mode = "cost" if mode_label == "Cost optimization" else "self_consumption"
 
 horizon_hours = st.sidebar.slider("Planning horizon (hours)", min_value=6, max_value=48, value=24, step=1)
-interval_minutes = st.sidebar.selectbox("Time interval (minutes)", [15, 30, 60], index=2)
+interval_minutes = st.sidebar.selectbox("Time interval (minutes)", [15, 30, 60], index=0)
 start_hour = st.sidebar.slider(
     "Simulated start time (clock hour, t=0)", min_value=0.0, max_value=23.5,
-    value=float(datetime.now().hour), step=0.5,
+    value=0.0, step=0.5,
 )
 solver_tolerance = st.sidebar.number_input(
     "Solver tolerance (relative MIP gap)", min_value=1e-12, max_value=1e-2,
@@ -84,8 +88,6 @@ max_iterations = st.sidebar.number_input("Max iterations", min_value=10, max_val
 st.sidebar.subheader("EVCC optimizer (optional)")
 evcc_enabled = st.sidebar.checkbox("Also run EVCC optimizer for comparison", value=False)
 evcc_url = st.sidebar.text_input("EVCC service URL", value=DEFAULT_EVCC_URL, disabled=not evcc_enabled)
-
-run_clicked = st.sidebar.button("▶ Run optimization", type="primary", width='stretch')
 
 # ----------------------------------------------------------------------------
 # Build time axis + forecasts (shared by Inputs tab display and the optimizer)
@@ -118,8 +120,8 @@ with tab_inputs:
         st.markdown("**Forecast** — dynamic tariff (baseline + morning/evening peaks)")
         c1, c2, c3 = st.columns(3)
         price_baseline = c1.number_input("Baseline price (EUR/kWh)", value=0.20, step=0.01, key="price_baseline")
-        price_peak_height = c2.number_input("Peak height (EUR/kWh)", value=0.15, step=0.01, key="price_peak_height")
-        export_price_fraction = c3.slider("Export price (fraction of import)", 0.0, 1.0, 0.5, key="export_fraction")
+        price_peak_height = c2.number_input("Peak height (EUR/kWh)", value=0.25, step=0.01, key="price_peak_height")
+        export_price_fraction = c3.slider("Export price (fraction of import)", 0.0, 1.0, 0.7, key="export_fraction")
         c1, c2 = st.columns(2)
         price_morning_hour = c1.slider("Morning peak hour", 0.0, 23.5, 8.0, step=0.5, key="price_morning_hour")
         price_evening_hour = c2.slider("Evening peak hour", 0.0, 23.5, 19.0, step=0.5, key="price_evening_hour")
@@ -171,8 +173,8 @@ with tab_inputs:
         )
         battery_min_soc, battery_max_soc = battery_min_soc / 100.0, battery_max_soc / 100.0
         c1, c2 = st.columns(2)
-        battery_max_charge = c1.number_input("Max charge power (kW)", value=3.0, min_value=0.0, key="battery_max_charge")
-        battery_max_discharge = c2.number_input("Max discharge power (kW)", value=3.0, min_value=0.0, key="battery_max_discharge")
+        battery_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery_max_charge")
+        battery_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery_max_discharge")
 
         st.markdown("**Forecast**")
         st.caption("— None; battery behavior is determined entirely by the optimizer.")
@@ -190,17 +192,24 @@ with tab_inputs:
         st.markdown("**Constraints**")
         st.caption("— (fixed demand; not controllable)")
 
-        st.markdown("**Forecast** — baseline + morning/evening peaks")
+        st.markdown("**Forecast** — baseline + morning/evening/EV peaks with daily variation")
         c1, c2 = st.columns(2)
         load_baseline = c1.number_input("Baseline demand (kW)", value=0.4, min_value=0.0, key="load_baseline")
-        load_peak_height = c2.number_input("Peak height (kW)", value=1.2, min_value=0.0, key="load_peak_height")
-        c1, c2 = st.columns(2)
+        load_baseline_variation = c2.number_input("Baseline variation (kW)", value=0.2, min_value=0.0, key="load_baseline_variation")
+        c1, c2, c3 = st.columns(3)
+        load_morning_peak_height = c1.number_input("Morning peak height (kW)", value=3.0, min_value=0.0, key="load_morning_peak_height")
+        load_evening_peak_height = c2.number_input("Evening peak height (kW)", value=2.0, min_value=0.0, key="load_evening_peak_height")
+        load_ev_peak_height = c3.number_input("EV peak height (kW)", value=6.0, min_value=0.0, key="load_ev_peak_height")
+        c1, c2, c3 = st.columns(3)
         load_morning_hour = c1.slider("Morning peak hour", 0.0, 23.5, 7.0, step=0.5, key="load_morning_hour")
-        load_evening_hour = c2.slider("Evening peak hour", 0.0, 23.5, 19.0, step=0.5, key="load_evening_hour")
+        load_evening_hour = c2.slider("Evening peak hour", 0.0, 23.5, 21.0, step=0.5, key="load_evening_hour")
+        load_ev_peak_hour = c3.slider("EV peak hour", 0.0, 23.5, 18.0, step=0.5, key="load_ev_peak_hour")
 
         load_forecast_full = simulate_load_demand(
             hours, baseline=load_baseline, morning_peak_hour=load_morning_hour,
-            evening_peak_hour=load_evening_hour, peak_height=load_peak_height,
+            evening_peak_hour=load_evening_hour, ev_peak_hour=load_ev_peak_hour,
+            morning_peak_height=load_morning_peak_height, evening_peak_height=load_evening_peak_height,
+            ev_peak_height=load_ev_peak_height, baseline_variation=load_baseline_variation,
         )
         st.plotly_chart(viz.plot_load_forecast(hours, load_forecast_full), width='stretch', key="chart_load_forecast")
 
@@ -304,11 +313,15 @@ with tab_optimization:
                 viz.plot_power_flow(
                     result.hours, result.grid_import, result.grid_export,
                     result.pv_power, result.battery_power, result.load_power,
+                    result.price_import, result.price_export,
                 ),
                 width='stretch', key="chart_power_flow_local",
             )
             st.plotly_chart(
-                viz.plot_cost_breakdown(result.cost_energy, result.cost_penalty),
+                viz.plot_cost_analysis(
+                    result.hours, result.grid_import, result.grid_export,
+                    result.price_import, result.price_export,
+                ),
                 width='stretch', key="chart_cost_local",
             )
             hours_ext = np.append(result.hours, result.hours[-1] + dt_hours) if len(result.hours) else result.hours
@@ -353,6 +366,8 @@ with tab_optimization:
                                 result.pv_power[: len(evcc_result.battery_power)],
                                 evcc_result.battery_power,
                                 result.load_power[: len(evcc_result.battery_power)],
+                                result.price_import[: len(evcc_result.battery_power)],
+                                result.price_export[: len(evcc_result.battery_power)],
                             ),
                             width='stretch', key="chart_power_flow_evcc",
                         )
