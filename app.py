@@ -20,10 +20,12 @@ from simulator import (
     simulate_grid_price,
     simulate_pv_production,
     simulate_load_demand,
+    simulate_dhw_demand,
     with_measured_start,
 )
 from optimizer import Optimizer, OptimizationResult
 from evcc_client import run_evcc_optimization, EVCCResult, DEFAULT_EVCC_URL
+from dhw_conversion import DHWPhysicalParams, convert_dhw_params
 import visualization as viz
 
 st.set_page_config(page_title="Home EMS Optimizer", page_icon="🏠", layout="wide")
@@ -68,6 +70,7 @@ charging_priority = st.sidebar.checkbox(
 st.sidebar.subheader("Assets")
 battery_1_enabled = st.sidebar.checkbox("🔋 Battery 1", value=True)
 battery_2_enabled = st.sidebar.checkbox("🔋 Battery 2", value=False)
+dhw_tank_enabled = st.sidebar.checkbox("💧 DHW Tank", value=False)
 
 st.sidebar.subheader("Configuration")
 mode_label = st.sidebar.selectbox(
@@ -254,6 +257,164 @@ with tab_inputs:
         battery2_charge_efficiency = 0.95
         battery2_discharge_efficiency = 0.95
 
+    # --- DHW Tank ---
+    if dhw_tank_enabled:
+        with st.expander("🚰 DHW Tank", expanded=True):
+            # Physical parameters section with light blue background
+            st.markdown("**Physical Parameters** *(editable)*")
+            with st.container():
+                st.markdown(
+                    '<div style="background-color: #E3F2FD; padding: 12px; border-radius: 5px; margin-bottom: 15px;">'
+                    '<small><i>Physical tank properties below. Derived battery parameters computed automatically.</i></small>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                c1, c2 = st.columns(2)
+                dhw_volume = c1.number_input(
+                    "Tank volume (liters)", value=300.0, min_value=1.0, step=10.0, key="dhw_volume",
+                    help="Total water volume in the DHW tank (liters)"
+                )
+                dhw_current_temp = c2.number_input(
+                    "Current water temp (°C)", value=50.0, min_value=0.0, max_value=100.0, step=1.0, key="dhw_current_temp",
+                    help="Measured water temperature at t=0"
+                )
+                
+                c1, c2 = st.columns(2)
+                dhw_min_temp = c1.number_input(
+                    "Minimum temp (°C)", value=20.0, min_value=0.0, max_value=100.0, step=1.0, key="dhw_min_temp",
+                    help="Ambient temperature around the tank (typically 20°C)"
+                )
+                dhw_max_temp = c2.number_input(
+                    "Maximum temp (°C)", value=60.0, min_value=0.0, max_value=100.0, step=1.0, key="dhw_max_temp",
+                    help="Maximum safe water temperature"
+                )
+                
+                c1, c2 = st.columns(2)
+                dhw_min_comfort_temp = c1.number_input(
+                    "Comfort temp (°C)", value=40.0, min_value=0.0, max_value=100.0, step=1.0, key="dhw_min_comfort_temp",
+                    help="Minimum water temperature for comfortable use (e.g., showers)"
+                )
+                dhw_heat_loss_coeff = c2.number_input(
+                    "Heat loss coeff (kW/K)", value=0.004, min_value=0.0, step=0.001, format="%.4f", key="dhw_heat_loss_coeff",
+                    help="Heat loss per Kelvin temperature difference (kW/K)"
+                )
+                
+                dhw_max_charge_power = st.number_input(
+                    "Heat pump power (kW)", value=3.0, min_value=0.0, step=0.1, key="dhw_max_charge_power",
+                    help="Maximum heating power from heat pump (kW)"
+                )
+            
+            # Calculate equivalent battery parameters
+            try:
+                dhw_physical = DHWPhysicalParams(
+                    volume_liters=dhw_volume,
+                    min_temp_celsius=dhw_min_temp,
+                    max_temp_celsius=dhw_max_temp,
+                    current_temp_celsius=dhw_current_temp,
+                    heat_loss_coeff_kw_per_k=dhw_heat_loss_coeff,
+                    min_comfort_temp_celsius=dhw_min_comfort_temp,
+                    max_charge_power_kw=dhw_max_charge_power,
+                )
+                dhw_battery_params = convert_dhw_params(dhw_physical)
+            except ValueError as e:
+                st.error(f"Invalid DHW parameters: {e}")
+                dhw_battery_params = None
+            
+            if dhw_battery_params:
+                st.markdown("**Current state** *(measured, t=0)*")
+                dhw_current_soc = st.slider(
+                    "Current SoC (%)", 0, 100, 
+                    int(dhw_battery_params.current_soc * 100), 
+                    disabled=True,
+                    help="Derived from current water temperature and temperature range"
+                ) / 100.0
+
+                st.markdown("**Constraints** *(derived from physical parameters)*")
+                c1, c2 = st.columns(2)
+                dhw_capacity = c1.number_input(
+                    "Energy capacity (kWh)", value=dhw_battery_params.capacity_kwh, 
+                    min_value=0.1,
+                    disabled=True,
+                    help="Calculated from tank volume and temperature range"
+                )
+                dhw_min_soc_val, dhw_max_soc_val = c2.slider(
+                    "Min / max SoC (%)", 0, 100, 
+                    (int(dhw_battery_params.min_soc * 100), int(dhw_battery_params.max_soc * 100)),
+                    disabled=True,
+                    help="Min: comfort constraint; Max: maximum safe temperature"
+                )
+                dhw_min_soc = dhw_min_soc_val / 100.0
+                dhw_max_soc = dhw_max_soc_val / 100.0
+                
+                c1, c2 = st.columns(2)
+                dhw_max_charge = c1.number_input(
+                    "Max charge power (kW)", value=dhw_battery_params.max_charge_power_kw,
+                    min_value=0.0,
+                    disabled=True,
+                    help="From heat pump power input"
+                )
+                dhw_max_discharge = c2.number_input(
+                    "Max discharge power (kW)", value=dhw_battery_params.max_discharge_power_kw,
+                    min_value=0.0,
+                    disabled=True,
+                    help="DHW has no active discharge (0 kW)"
+                )
+                
+                dhw_passive_discharge = st.number_input(
+                    "Passive discharge power (kW)", value=dhw_battery_params.passive_discharge_power_kw,
+                    min_value=0.0, step=0.001,
+                    disabled=True,
+                    help="Calculated from heat loss coefficient and current temperature"
+                )
+                
+                c1, c2 = st.columns(2)
+                dhw_charge_efficiency = c1.slider(
+                    "Charge efficiency", 0.0, 1.0, 1.0, step=0.01,
+                    disabled=True,
+                    help="Thermal storage has no charge/discharge losses (1.0)"
+                )
+                dhw_discharge_efficiency = c2.slider(
+                    "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
+                    disabled=True,
+                    help="Thermal storage has no charge/discharge losses (1.0)"
+                )
+
+                st.markdown("**Forecast** — hot water demand")
+                c1, c2 = st.columns(2)
+                dhw_morning_peak_energy = c1.number_input(
+                    "Morning shower energy (kWh)", value=0.8, min_value=0.0, step=0.1,
+                    key="dhw_morning_peak_energy",
+                    help="Typical energy needed for morning showers"
+                )
+                dhw_evening_peak_energy = c2.number_input(
+                    "Evening usage energy (kWh)", value=0.5, min_value=0.0, step=0.1,
+                    key="dhw_evening_peak_energy",
+                    help="Typical energy needed for evening hot water use"
+                )
+                c1, c2 = st.columns(2)
+                dhw_morning_hour = c1.slider(
+                    "Morning peak hour", 0.0, 23.5, 7.0, step=0.5, key="dhw_morning_hour",
+                    help="Hour of day for typical morning shower"
+                )
+                dhw_evening_hour = c2.slider(
+                    "Evening peak hour", 0.0, 23.5, 21.0, step=0.5, key="dhw_evening_hour",
+                    help="Hour of day for typical evening usage"
+                )
+                
+                dhw_demand_forecast_full = simulate_dhw_demand(
+                    hours, morning_peak_hour=dhw_morning_hour, evening_peak_hour=dhw_evening_hour,
+                    morning_peak_energy=dhw_morning_peak_energy, evening_peak_energy=dhw_evening_peak_energy,
+                )
+                st.plotly_chart(
+                    viz.plot_discharge_demand_forecast(hours, dhw_demand_forecast_full),
+                    width='stretch', key="chart_dhw_demand_forecast",
+                )
+
+                st.markdown("**Control**")
+                st.caption("Thermal Power (kW) — set by the optimizer via heat pump setpoint.")
+    else:
+        dhw_battery_params = None
+
     st.header("Loads")
 
     # --- Home Consumption ---
@@ -319,6 +480,16 @@ if battery_2_enabled:
         max_charge_power=battery2_max_charge, max_discharge_power=battery2_max_discharge,
         passive_discharge_power=battery2_passive_discharge,
         charge_efficiency=battery2_charge_efficiency, discharge_efficiency=battery2_discharge_efficiency,
+    ))
+
+if dhw_tank_enabled and dhw_battery_params:
+    storages.append(Storage(
+        "DHW Tank", current_soc=dhw_battery_params.current_soc, capacity=dhw_battery_params.capacity_kwh,
+        min_soc=dhw_battery_params.min_soc, max_soc=dhw_battery_params.max_soc,
+        max_charge_power=dhw_battery_params.max_charge_power_kw, max_discharge_power=dhw_battery_params.max_discharge_power_kw,
+        passive_discharge_power=dhw_battery_params.passive_discharge_power_kw,
+        charge_efficiency=1.0, discharge_efficiency=1.0,  # No charge/discharge efficiency losses for thermal storage
+        demand_forecast=dhw_demand_forecast_full,
     ))
 
 load = Load(
@@ -423,6 +594,7 @@ with tab_optimization:
                     result.pv_power, load_power=result.load_power,
                     price_import=result.price_import, price_export=result.price_export,
                     storage_dict={name: data["power"] for name, data in result.storages.items()},
+                    horizon_hours=horizon_hours,
                 ),
                 width='stretch', key="chart_power_flow_local",
             )
@@ -430,6 +602,7 @@ with tab_optimization:
                 viz.plot_cost_analysis(
                     result.hours, result.grid_import, result.grid_export,
                     result.price_import, result.price_export,
+                    horizon_hours=horizon_hours,
                 ),
                 width='stretch', key="chart_cost_local",
             )
@@ -446,7 +619,7 @@ with tab_optimization:
             soc_dict = {name: data["soc"] for name, data in result.storages.items()}
             
             st.plotly_chart(
-                viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds),
+                viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds, horizon_hours=horizon_hours),
                 width='stretch', key="chart_soc_local",
             )
 
@@ -518,6 +691,7 @@ with tab_optimization:
                                 price_import=result.price_import[:n_evcc],
                                 price_export=result.price_export[:n_evcc],
                                 storage_dict={name: data["power"] for name, data in evcc_result.storages.items()},
+                                horizon_hours=horizon_hours,
                             ),
                             width='stretch', key="chart_power_flow_evcc",
                         )
@@ -527,6 +701,7 @@ with tab_optimization:
                                 evcc_result.grid_import, evcc_result.grid_export,
                                 result.price_import[:n_evcc],
                                 result.price_export[:n_evcc],
+                                horizon_hours=horizon_hours,
                             ),
                             width='stretch', key="chart_cost_evcc",
                         )
@@ -544,7 +719,7 @@ with tab_optimization:
                             soc_dict_evcc = {name: data["soc"] for name, data in evcc_result.storages.items()}
                             
                             st.plotly_chart(
-                                viz.plot_soc_trajectory_multi(hours_ext_evcc, soc_dict_evcc, soc_bounds_evcc),
+                                viz.plot_soc_trajectory_multi(hours_ext_evcc, soc_dict_evcc, soc_bounds_evcc, horizon_hours=horizon_hours),
                                 width='stretch', key="chart_soc_evcc",
                             )
                     else:

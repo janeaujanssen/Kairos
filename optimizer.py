@@ -180,16 +180,17 @@ class Optimizer:
             # Initial SoC = measured current state
             prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
             
-            # SoC dynamics with charge/discharge efficiency
-            # Energy stored = (charging_power * charge_efficiency - discharging_power)
+            # SoC dynamics with charge/discharge efficiency and demand withdrawal
+            # Energy stored = (charging_power * charge_efficiency - discharging_power - passive_loss - demand)
             passive_loss = storage_passive_discharge_dict[name]
             eta_c = storage_charge_efficiency_dict[name]
+            demand_energy = storage.demand_forecast if storage.demand_forecast is not None else np.zeros(n)
             
             for t in range(n):
-                # SoC_t+1 = SoC_t + (p_c * eta_c - p_d - passive_loss) * dt / capacity
+                # SoC_t+1 = SoC_t + [(p_c * eta_c - p_d - passive_loss) * dt - demand_energy] / capacity
                 prob += (
                     storage_soc_dict[name][t + 1] == storage_soc_dict[name][t] + 
-                    (storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss) * dt / storage.capacity,
+                    ((storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss) * dt - demand_energy[t]) / storage.capacity,
                     f"{name}_soc_dynamics_{t}",
                 )
             
@@ -197,6 +198,8 @@ class Optimizer:
             for t in range(n + 1):
                 prob += storage_soc_dict[name][t] >= storage.min_soc - storage_slack_low_dict[name][t], f"{name}_soc_min_{t}"
                 prob += storage_soc_dict[name][t] <= storage.max_soc + storage_slack_high_dict[name][t], f"{name}_soc_max_{t}"
+            
+
 
         # Energy balance: Grid + PV = Load + sum(storages as seen by system with discharge efficiency)
         # For each storage: system provides p_c (charging) and receives p_d * eta_d (discharging)

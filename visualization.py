@@ -20,6 +20,7 @@ def _layout(fig: go.Figure, title: str, yaxis_title: str, xaxis_title: str = "Ti
         margin=dict(l=40, r=20, t=40, b=40),
         height=280,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(domain=[0.02, 0.95]),  # Fixed plot area width regardless of y-axis label length
     )
     return fig
 
@@ -51,6 +52,25 @@ def plot_load_forecast(hours: np.ndarray, load_power: np.ndarray) -> go.Figure:
     return _layout(fig, "Load demand forecast", "kW")
 
 
+def plot_discharge_demand_forecast(hours: np.ndarray, discharge_demand_energy: np.ndarray) -> go.Figure:
+    """Plot discharge demand forecast (energy per timestep, not power).
+    
+    This represents energy withdrawn from storage (e.g., hot water demand, EV departure goal),
+    not electrical load demand. Distinguished from load_power_forecast which is grid demand.
+    
+    Args:
+        hours: Time array (hours)
+        discharge_demand_energy: Discharge demand in kWh per timestep (not power)
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=hours, y=discharge_demand_energy,
+        name="Discharge demand", marker=dict(color="#ff7f0e"),
+        hovertemplate="<b>Discharge demand</b><br>%{y:.2f} kWh<extra></extra>"
+    ))
+    return _layout(fig, "Discharge demand forecast", "kWh per timestep")
+
+
 def plot_power_flow(
     hours: np.ndarray,
     grid_import: np.ndarray,
@@ -61,6 +81,7 @@ def plot_power_flow(
     price_import: np.ndarray = None,
     price_export: np.ndarray = None,
     storage_dict: dict = None,
+    horizon_hours: float = 24.0,
 ) -> go.Figure:
     """Hybrid power flow chart showing energy balance: Grid + PV = Load + Storage(s).
     
@@ -178,6 +199,7 @@ def plot_power_flow(
         "margin": dict(l=40, r=20, t=40, b=40),
         "legend": dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         "hovermode": "x unified",
+        "xaxis": dict(domain=[0.02, 0.95], range=[0, horizon_hours]),  # Fixed plot area width, dynamic x-axis range
     }
     
     # Configure y-axes
@@ -199,6 +221,7 @@ def plot_soc_trajectory_multi(
     hours_extended: np.ndarray,
     soc_dict: dict,
     bounds_dict: dict,
+    horizon_hours: float = 24.0,
 ) -> go.Figure:
     """Plot SoC trajectories for multiple storage assets.
     
@@ -239,6 +262,7 @@ def plot_soc_trajectory_multi(
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
+        xaxis=dict(domain=[0.02, 0.95], range=[0, horizon_hours]),  # Fixed plot area width, dynamic x-axis range
     )
     
     return fig
@@ -250,6 +274,7 @@ def plot_cost_analysis(
     grid_export: np.ndarray,
     price_import: np.ndarray,
     price_export: np.ndarray,
+    horizon_hours: float = 24.0,
 ) -> go.Figure:
     """Plot cost analysis: per-interval cost bars + cumulative cost line with profit/loss indication.
     
@@ -306,6 +331,7 @@ def plot_cost_analysis(
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
+        xaxis=dict(domain=[0.02, 0.95], range=[0, horizon_hours]),  # Fixed plot area width, dynamic x-axis range
     )
     
     fig.update_yaxes(title_text="Cost per Interval (€)", secondary_y=False)

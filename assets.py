@@ -121,6 +121,7 @@ class Storage(Asset):
         passive_discharge_power: Optional[float] = None,
         charge_efficiency: float = 0.95,
         discharge_efficiency: float = 0.95,
+        demand_forecast: Optional[np.ndarray] = None,
     ):
         super().__init__(name)
         self.current_soc = current_soc                # fraction 0-1, measured at t=0
@@ -132,6 +133,7 @@ class Storage(Asset):
         self.passive_discharge_power = passive_discharge_power  # kWh per timestep (for thermal storage)
         self.charge_efficiency = charge_efficiency      # efficiency when storing energy (0-1, e.g., 0.95 = 95% stored, 5% lost as heat)
         self.discharge_efficiency = discharge_efficiency  # efficiency when releasing energy (0-1, e.g., 0.95 = 95% available, 5% lost as heat)
+        self.demand_forecast = demand_forecast  # kWh per timestep, energy that must be discharged (e.g., hot water demand)
         self._power_schedule: Optional[np.ndarray] = None  # set by optimizer after solve
 
     def get_state(self) -> dict:
@@ -152,7 +154,10 @@ class Storage(Asset):
         return c
 
     def get_forecast(self) -> dict:
-        return {}
+        f = {}
+        if self.demand_forecast is not None:
+            f["demand_forecast"] = self.demand_forecast
+        return f
 
     def get_control(self) -> dict:
         return {"set_power": self._power_schedule}

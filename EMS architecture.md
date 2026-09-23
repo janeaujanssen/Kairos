@@ -105,6 +105,9 @@ Subject to (both modes):
 - Energy balance at each time step: $\sum \text{Source Power} = \sum \text{Load Power} + \sum \text{Storage Power}$
 - Storage SoC dynamics with passive loss: $\text{SoC}_{t+1} = \text{SoC}_t + (\text{Storage Power}_t - \text{Passive Discharge}_t) \times \Delta t / \text{Capacity}$
 - All asset constraints: SoC limits, power limits, etc.
+- SoC dynamics with demand: $\text{SoC}_{t+1} = \text{SoC}_t + \frac{(P_{\text{charge}} \cdot \eta_c - P_{\text{discharge}} - P_{\text{passive}}) \cdot \Delta t - D_t}{\text{Capacity}}$
+  - Where $D_t$ is energy demand from storage at timestep $t$ (kWh), if forecast provided
+  - Demand directly reduces SoC, creating visible drops in trajectories at demand times
 - Physical feasibility: cannot discharge more energy than stored, etc.
 
 **Output:**
@@ -159,7 +162,7 @@ Three concrete classes inherit from `Asset`:
 - **`Storage`**: Energy storage (Battery, thermal masses)
   - State: `current_soc` (State of Charge in % or thermal equivalent)
   - Constraints: `capacity`, `min_soc`/`max_soc`, `max_charge_power`, `max_discharge_power`, `passive_discharge_power` (only for DHW storage; power loss due to heat loss)
-  - Forecast: (none)
+  - Forecast: `demand_forecast` (optional; energy demand at each timestep that withdraws from storage, e.g., hot water usage, EV driving)
   - Control: `set_power(kW)`
   
 - **`Load`**: Energy consumers (Home Consumption, controllable loads)
@@ -220,9 +223,14 @@ The DHW tank is abstracted as **virtual thermal energy storage** using the same 
 - **Self-discharge (Heat Loss)**: Heat naturally flows out via tank insulation: $Q_{\text{loss}} = \text{HLC}_{\text{tank}} \cdot (T_{\text{water}} - 20°C)$
   - HLC_tank = tank heat loss coefficient (kW/K)
   - Ambient temperature fixed at 20°C (room temperature inside house)
-- **Min SoC Constraint**: Rather than forecasting hot water demand, define a minimum acceptable SoC representing sufficient water for basic use (e.g., showers at 40°C):
-  - Optimizer maintains SoC ≥ min_soc, ensuring sufficient hot water is always available
-  - Example: For 40°C minimum comfort temperature, min_soc = (40 − 20) / (60 − 20) = 0.5
+- **Hot Water Demand Forecast**: Optional forecast of hot water usage patterns (e.g., showers expected at 7 AM and 9 PM)
+  - Provides demand at each timestep (kWh), e.g., "0.8 kWh needed at 7 AM"
+  - **Integrated into SoC dynamics**: Demand energy is subtracted directly from storage, causing actual SoC drops at demand times
+  - Optimizer automatically schedules pre-charging before high-demand periods to ensure sufficient energy is available
+  - Helps optimize charging timing based on prices and solar availability
+  - Without this forecast, only the min_soc comfort constraint drives charging (reactive)
+  - With forecast, charging becomes proactive—the optimizer schedules pre-heating during cheap electricity or high solar production
+  - **Benefit**: SoC trajectory now shows natural drops at demand times, making it clear when energy is being withdrawn
 - **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a DHW temperature setpoint:
   - Positive power (e.g., +3 kW): Charge the tank (pre-heating water)
   - Zero power: Maintain current temperature (offset losses only)

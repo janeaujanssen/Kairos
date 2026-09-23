@@ -90,3 +90,34 @@ def with_measured_start(forecast: np.ndarray, measured_current_value: float) -> 
     if len(out) > 0:
         out[0] = measured_current_value
     return out
+
+
+def simulate_dhw_demand(
+    hours: np.ndarray,
+    morning_peak_hour: float = 7.0,
+    evening_peak_hour: float = 21.0,
+    morning_peak_energy: float = 0.8,
+    evening_peak_energy: float = 0.5,
+    peak_width: float = 0.5,
+) -> np.ndarray:
+    """
+    DHW (hot water) demand forecast in kWh per timestep.
+    Models typical shower/usage peaks in the morning and evening.
+    
+    Args:
+        hours: Time axis in hours
+        morning_peak_hour: Hour of day for morning shower (e.g., 7.0 = 7 AM)
+        evening_peak_hour: Hour of day for evening usage (e.g., 21.0 = 9 PM)
+        morning_peak_energy: Energy peak height for morning shower (kWh)
+        evening_peak_energy: Energy peak height for evening usage (kWh)
+        peak_width: Width of each peak in hours (Gaussian sigma)
+        
+    Returns:
+        DHW demand in kWh per timestep (energy, not power)
+    """
+    hod = hours % 24  # hours of the day
+    morning = morning_peak_energy * np.exp(-0.5 * ((hod - morning_peak_hour) / peak_width) ** 2)
+    evening = evening_peak_energy * np.exp(-0.5 * ((hod - evening_peak_hour) / peak_width) ** 2)
+    
+    return morning + evening
+
