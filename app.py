@@ -191,6 +191,15 @@ with tab_inputs:
             key="battery1_passive_discharge",
             help="Power lost due to self-discharge or standby losses (kW). For electrical batteries, typically 0."
         )
+        c1, c2 = st.columns(2)
+        battery1_charge_efficiency = c1.slider(
+            "Charge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery1_charge_efficiency",
+            help="Fraction of input power stored (0-1). 0.95 = 95% stored, 5% lost as heat."
+        )
+        battery1_discharge_efficiency = c2.slider(
+            "Discharge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery1_discharge_efficiency",
+            help="Fraction of stored energy available when discharging (0-1). 0.95 = 95% available, 5% lost."
+        )
 
         st.markdown("**Forecast**")
         st.caption("— None; battery behavior is determined entirely by the optimizer.")
@@ -219,6 +228,15 @@ with tab_inputs:
                 key="battery2_passive_discharge",
                 help="Power lost due to self-discharge or standby losses (kW)."
             )
+            c1, c2 = st.columns(2)
+            battery2_charge_efficiency = c1.slider(
+                "Charge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery2_charge_efficiency",
+                help="Fraction of input power stored (0-1). 0.95 = 95% stored, 5% lost as heat."
+            )
+            battery2_discharge_efficiency = c2.slider(
+                "Discharge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery2_discharge_efficiency",
+                help="Fraction of stored energy available when discharging (0-1). 0.95 = 95% available, 5% lost."
+            )
 
             st.markdown("**Forecast**")
             st.caption("— None; battery behavior is determined entirely by the optimizer.")
@@ -233,6 +251,8 @@ with tab_inputs:
         battery2_max_charge = 0.0
         battery2_max_discharge = 0.0
         battery2_passive_discharge = 0.0
+        battery2_charge_efficiency = 0.95
+        battery2_discharge_efficiency = 0.95
 
     st.header("Loads")
 
@@ -289,6 +309,7 @@ if battery_1_enabled:
         min_soc=battery1_min_soc, max_soc=battery1_max_soc,
         max_charge_power=battery1_max_charge, max_discharge_power=battery1_max_discharge,
         passive_discharge_power=battery1_passive_discharge,
+        charge_efficiency=battery1_charge_efficiency, discharge_efficiency=battery1_discharge_efficiency,
     ))
 
 if battery_2_enabled:
@@ -297,6 +318,7 @@ if battery_2_enabled:
         min_soc=battery2_min_soc, max_soc=battery2_max_soc,
         max_charge_power=battery2_max_charge, max_discharge_power=battery2_max_discharge,
         passive_discharge_power=battery2_passive_discharge,
+        charge_efficiency=battery2_charge_efficiency, discharge_efficiency=battery2_discharge_efficiency,
     ))
 
 load = Load(

@@ -115,8 +115,8 @@ def build_payload(
             "p_N": price_import.tolist(),
             "p_E": price_export.tolist(),
         },
-        "eta_c": 0.95,
-        "eta_d": 0.95,
+        "eta_c": storages[0].charge_efficiency,
+        "eta_d": storages[0].discharge_efficiency,
     }
     return payload
 
