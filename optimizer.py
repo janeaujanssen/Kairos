@@ -15,6 +15,11 @@ Energy balance enforced at every timestep t:
 (with the project's sign convention: Grid/PV positive = supply, Battery
 positive = charging, Load always >= 0)
 
+Passive losses (e.g., battery self-discharge, thermal storage heat loss) are
+accounted for internally in the SoC dynamics: they reduce the effective
+charging/discharging power but do not appear as external demands in the
+energy balance.
+
 Soft constraints: the Home Battery's SoC bounds may be violated at a
 (large) per-kWh penalty cost rather than making the problem infeasible --
 this lets the optimizer always return a best-achievable schedule (e.g. under
@@ -59,6 +64,7 @@ class OptimizationResult:
     load_power: np.ndarray = field(default_factory=lambda: np.array([]))
     battery_power: np.ndarray = field(default_factory=lambda: np.array([]))
     battery_soc: np.ndarray = field(default_factory=lambda: np.array([]))  # length n+1
+    battery_passive_discharge: np.ndarray = field(default_factory=lambda: np.array([]))  # passive loss power, kW
 
     price_import: np.ndarray = field(default_factory=lambda: np.array([]))
     price_export: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -153,10 +159,15 @@ class Optimizer:
         # Initial SoC = measured current state
         prob += soc[0] == self.battery.current_soc, "initial_soc"
 
-        # SoC dynamics: soc[t+1] = soc[t] + power_t * dt / capacity
+        # Extract passive discharge once (used in both energy balance and SoC dynamics)
+        batt_constraints = self.battery.get_constraints()
+        passive_discharge = batt_constraints.get("passive_discharge_power", 0.0)
+
+        # SoC dynamics: soc[t+1] = soc[t] + (power_t - passive_loss) * dt / capacity
+        # (passive_loss is a power in kW, multiplied by dt to get energy in kWh)
         for t in range(n):
             prob += (
-                soc[t + 1] == soc[t] + batt_power[t] * dt / self.battery.capacity,
+                soc[t + 1] == soc[t] + (batt_power[t] - passive_discharge) * dt / self.battery.capacity,
                 f"soc_dynamics_{t}",
             )
 
@@ -166,6 +177,7 @@ class Optimizer:
             prob += soc[t] <= self.battery.max_soc + soc_high_slack[t], f"soc_max_{t}"
 
         # Energy balance: Grid + PV = Load + Battery, at every t
+        # (passive loss is internal to the battery, handled in SoC dynamics, not an external demand)
         for t in range(n):
             prob += (
                 (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + batt_power[t],
@@ -222,6 +234,7 @@ class Optimizer:
         result.grid_export = np.array([val(v) for v in p_export])
         result.battery_power = np.array([val(v) for v in batt_power])
         result.battery_soc = np.array([val(v) for v in soc])
+        result.battery_passive_discharge = np.full(n, passive_discharge, dtype=float)
 
         cost_energy = float(
             np.sum(result.grid_import * price_import - result.grid_export * price_export) * dt

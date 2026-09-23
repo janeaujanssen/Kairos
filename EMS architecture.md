@@ -12,9 +12,11 @@
 | Component | State | Constraints | Forecast | Control |
 |-----------|-------|-------------|----------|---------|
 | **Home Battery** | SoC | • Energy capacity<br>• Min/Max SoC<br>• Max charge/discharge power | — | Battery Charge/Discharge Power |
-| **DHW Tank** | Thermal SoC<br>(based on water temp) | • Thermal capacity<br>• Min/Max temperature<br>• Max charge/discharge power | Hot water demand forecast | Thermal Power<br>(via heat pump setpoint) |
-| **Building Thermal Mass** | Thermal SoC<br>(based on indoor temp) | • Thermal capacity<br>• Min/Max comfort temperature<br>• Max charge/discharge power | • Outdoor temp<br>• Solar gains | Thermal Power<br>(via heat pump offset) |
+| **DHW Tank** | Thermal SoC<br>(based on water temp) | • Thermal capacity<br>• Min/Max temperature<br>• Max charge/discharge power<br>• Passive discharge power | Hot water demand forecast | Thermal Power<br>(via heat pump setpoint) |
+| **Building Thermal Mass** | Thermal SoC<br>(based on indoor temp) | • Thermal capacity<br>• Min/Max comfort temperature<br>• Max charge/discharge power<br>• No passive discharge* | • Outdoor temp<br>• Solar gains | Thermal Power<br>(via heat pump offset) |
 | **EV Battery** | EV SoC | • Energy capacity<br>• Desired SoC at departure<br>• Max charge/discharge power | Arrival/departure time | Battery Charge/Discharge Power |
+
+*Building thermal mass has zero passive discharge because baseline weather-compensation heating curve already offsets outdoor heat loss. Stored energy above baseline naturally decays as building cools—this is intentional discharge, not loss.
 
 ## Loads
 
@@ -100,6 +102,7 @@ This mode accounts for time-varying electricity prices and export compensation. 
 
 Subject to (both modes):
 - Energy balance at each time step: $\sum \text{Source Power} = \sum \text{Load Power} + \sum \text{Storage Power}$
+- Storage SoC dynamics with passive loss: $\text{SoC}_{t+1} = \text{SoC}_t + (\text{Storage Power}_t - \text{Passive Discharge}_t) \times \Delta t / \text{Capacity}$
 - All asset constraints: SoC limits, power limits, etc.
 - Physical feasibility: cannot discharge more energy than stored, etc.
 
@@ -154,8 +157,8 @@ Three concrete classes inherit from `Asset`:
   
 - **`Storage`**: Energy storage (Battery, thermal masses)
   - State: `current_soc` (State of Charge in % or thermal equivalent)
-  - Constraints: `capacity`, `min_soc`/`max_soc`, `max_charge_power`, `max_discharge_power`
-  - Forecast: None (behavior determined by optimization)
+  - Constraints: `capacity`, `min_soc`/`max_soc`, `max_charge_power`, `max_discharge_power`, `passive_discharge_power` (only for thermal storage; power loss due to heat loss)
+  - Forecast: (none)
   - Control: `set_power(kW)`
   
 - **`Load`**: Energy consumers (Home Consumption, controllable loads)
@@ -170,20 +173,35 @@ This design ensures the optimizer can work with any asset type through a uniform
 
 The building thermal mass is abstracted as **virtual energy storage** using the same `Storage` interface as electrical batteries:
 
-- **State of Charge (SoC)**: Derived from measured temperature: $\text{SoC} = \frac{T_{\text{indoor}} - T_{\text{min}}}{T_{\text{max}} - T_{\text{min}}}$
+- **State of Charge (SoC)**: Derived from measured temperature: $\text{SoC} = \frac{T_{\text{indoor}} - T_{\text{baseline}}}{T_{\text{max}} - T_{\text{baseline}}}$
   - Measured directly, eliminating accumulated estimation error
-- **Capacity**: Thermal energy storage within comfort range: $E_{\text{max}} = C_{\text{building}} \cdot (T_{\text{max}} - T_{\text{min}})$
+  - **Baseline temperature** (typically 20°C) is maintained passively by weather compensation heating curve
+  - Example: If baseline = 20°C, max comfort = 21°C, and current = 20.5°C → SoC = 0.5
+- **Capacity**: Thermal energy storage within comfort band: $E_{\text{max}} = C_{\text{building}} \cdot (T_{\text{max}} - T_{\text{baseline}})$
   - $C_{\text{building}}$ = thermal capacitance (kWh/K): energy needed to raise building temperature by 1°C
-- **Self-discharge (Heat Loss)**: Heat naturally flows out via envelope: $Q_{\text{loss}} = \text{HLC} \cdot (T_{\text{indoor}} - T_{\text{outdoor}})$
-  - HLC = heat loss coefficient (kW/K): thermal power lost per 1°C difference between indoor and outdoor
-  - Forecasted using outdoor temperature and building heat loss coefficient
-- **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a heat pump heating curve offset via a translation layer:
-  - Positive power (e.g., +2 kW): Charge the thermal mass (pre-heating)
-  - Zero power: Neutral (weather compensation mode maintains baseline temperature)
-  - Negative power (e.g., −1 kW): Discharge the thermal mass (allow building to cool)
-  - The translation layer converts requested power to heating curve offset: $\Delta T_{\text{curve}} = K \cdot P_{\text{thermal}}$, where $K$ is an empirical gain factor (K/kW)
-
-The optimizer remains completely hardware-agnostic; actual heat pump control (weather compensation mode, heating curve adjustment) is handled by a separate translation layer that converts requested thermal power into physical commands.
+- **Passive Discharge**: Zero (no true losses)
+  - The baseline heating curve (weather compensation mode) already offsets outdoor heat loss, maintaining 20°C
+  - Any stored energy above baseline naturally decays as the building cools back toward 20°C
+  - This is intentional **discharge** (using stored energy), not a **loss** (energy escaping to environment)
+- **Charging (Active)**: Optimizer sets thermal power (kW) via `set_power()`:
+  - Positive power (e.g., +2 kW): Raise weather compensation curve by offset +ΔT
+  - Heat pump delivers more power than needed for baseline, pre-heating building
+  - Relationship: $P_{\text{charge}} = K_{\text{charge}} \cdot \Delta T_{\text{curve}}$ (to be calibrated)
+  - Fast, controlled by heat pump (up to max charge power, typically 5 kW)
+  
+- **Discharging (Active cooling)**: Optimizer sets negative thermal power (kW) via `set_power()`:
+  - Negative power (e.g., -1 kW): Lower weather compensation curve by offset -ΔT below baseline
+  - Heat pump reduces active heating, allowing building to cool faster toward lower setpoint
+  - Discharge power from temperature difference: $P_{\text{discharge}} = K_{\text{discharge}} \times (T_{\text{indoor}} - T_{\text{setpoint,lowered}})$
+  - Even with baseline curve, if building is above 20°C, passive discharge occurs: $P_{\text{passive}} = K_{\text{discharge}} \times (T_{\text{indoor}} - 20°C)$
+  - $K_{\text{discharge}}$ relates temperature difference between indoor temperature and curve setpoint to available discharge power (to be calibrated empirically)
+  - Not independently controllable at fixed rate—discharge rate depends on indoor temperature and setpoint difference
+  - Slower than charging due to thermal inertia and being limited by how much you can lower the setpoint
+  
+- **Control Strategy**: Optimizer orchestrates charging/discharging around prices and renewable availability:
+  - **During cheap electricity or high solar**: Raise curve offset (+ΔT) to actively pre-heat
+  - **During expensive periods or low solar**: Lower curve offset (-ΔT) to reduce active heating, letting stored thermal energy offset the load
+  - Translation layer calibrates the relationship between curve offset (ΔT) and actual power
 
 #### DHW Tank as a Virtual Battery
 

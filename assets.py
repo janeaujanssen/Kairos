@@ -98,8 +98,13 @@ class Source(Asset):
 
 class Storage(Asset):
     """
-    Energy storage (Home Battery; future: DHW Tank, Building Thermal Mass, EV
-    Battery). State of charge is tracked as a fraction (0-1) of `capacity`.
+    Energy storage (Home Battery, DHW Tank, Building Thermal Mass, EV Battery).
+    State of charge is tracked as a fraction (0-1) of `capacity`.
+    
+    For assets with passive losses (thermal storage), the passive_discharge_power
+    is pre-calculated by a conversion layer and passed in; it represents the power
+    lost due to heat loss or other passive processes (kW). The optimizer uses this
+    power rate to calculate energy losses over each timestep in the balance equation.
     """
 
     asset_type = "storage"
@@ -113,6 +118,7 @@ class Storage(Asset):
         max_soc: float,
         max_charge_power: float,
         max_discharge_power: float,
+        passive_discharge_power: Optional[float] = None,
     ):
         super().__init__(name)
         self.current_soc = current_soc                # fraction 0-1, measured at t=0
@@ -121,19 +127,23 @@ class Storage(Asset):
         self.max_soc = max_soc                          # fraction 0-1
         self.max_charge_power = max_charge_power        # kW
         self.max_discharge_power = max_discharge_power  # kW
+        self.passive_discharge_power = passive_discharge_power  # kWh per timestep (for thermal storage)
         self._power_schedule: Optional[np.ndarray] = None  # set by optimizer after solve
 
     def get_state(self) -> dict:
         return {"current_soc": self.current_soc}
 
     def get_constraints(self) -> dict:
-        return {
+        c = {
             "capacity": self.capacity,
             "min_soc": self.min_soc,
             "max_soc": self.max_soc,
             "max_charge_power": self.max_charge_power,
             "max_discharge_power": self.max_discharge_power,
         }
+        if self.passive_discharge_power is not None:
+            c["passive_discharge_power"] = self.passive_discharge_power
+        return c
 
     def get_forecast(self) -> dict:
         return {}

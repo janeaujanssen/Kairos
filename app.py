@@ -182,6 +182,11 @@ with tab_inputs:
         c1, c2 = st.columns(2)
         battery_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery_max_charge")
         battery_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery_max_discharge")
+        battery_passive_discharge = st.number_input(
+            "Passive discharge power (kW)", value=0.0, min_value=0.0, step=0.001,
+            key="battery_passive_discharge",
+            help="Power lost due to self-discharge or standby losses (kW). For electrical batteries, typically 0."
+        )
 
         st.markdown("**Forecast**")
         st.caption("— None; battery behavior is determined entirely by the optimizer.")
@@ -239,6 +244,7 @@ battery = Storage(
     "Home Battery", current_soc=battery_current_soc, capacity=battery_capacity,
     min_soc=battery_min_soc, max_soc=battery_max_soc,
     max_charge_power=battery_max_charge, max_discharge_power=battery_max_discharge,
+    passive_discharge_power=battery_passive_discharge,
 )
 load = Load(
     "Home Consumption", current_power=load_current_power,
