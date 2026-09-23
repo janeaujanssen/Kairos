@@ -62,9 +62,9 @@ class OptimizationResult:
     grid_export: np.ndarray = field(default_factory=lambda: np.array([]))
     pv_power: np.ndarray = field(default_factory=lambda: np.array([]))
     load_power: np.ndarray = field(default_factory=lambda: np.array([]))
-    battery_power: np.ndarray = field(default_factory=lambda: np.array([]))
-    battery_soc: np.ndarray = field(default_factory=lambda: np.array([]))  # length n+1
-    battery_passive_discharge: np.ndarray = field(default_factory=lambda: np.array([]))  # passive loss power, kW
+    
+    # Multi-storage support: storages dict {asset_name: {"power": array, "soc": array, "passive_discharge": array}}
+    storages: dict = field(default_factory=dict)
 
     price_import: np.ndarray = field(default_factory=lambda: np.array([]))
     price_export: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -81,13 +81,12 @@ class OptimizationResult:
 
     def control_at_t0(self) -> dict:
         """Hardware setpoints to apply for the *next* interval."""
-        if len(self.battery_power) == 0:
+        if not self.storages or len(self.grid_import) == 0:
             return {}
-        return {
-            "battery_power_kw": float(self.battery_power[0]),
-            "grid_import_kw": float(self.grid_import[0]),
-            "grid_export_kw": float(self.grid_export[0]),
-        }
+        ctrl = {"grid_import_kw": float(self.grid_import[0]), "grid_export_kw": float(self.grid_export[0])}
+        for storage_name, storage_data in self.storages.items():
+            ctrl[f"{storage_name.lower().replace(' ', '_')}_power_kw"] = float(storage_data["power"][0])
+        return ctrl
 
 
 class Optimizer:
@@ -97,7 +96,7 @@ class Optimizer:
         self,
         grid: Source,
         pv: Source,
-        battery: Storage,
+        storages: List[Storage],
         load: Load,
         hours: np.ndarray,
         dt_hours: float,
@@ -110,7 +109,7 @@ class Optimizer:
     ):
         self.grid = grid
         self.pv = pv
-        self.battery = battery
+        self.storages = storages  # List of Storage objects
         self.load = load
         self.hours = hours
         self.dt = dt_hours
@@ -142,45 +141,53 @@ class Optimizer:
 
         p_import = [pulp.LpVariable(f"p_import_{t}", lowBound=0, upBound=max_imp) for t in range(n)]
         p_export = [pulp.LpVariable(f"p_export_{t}", lowBound=0, upBound=max_exp) for t in range(n)]
-        batt_power = [
-            pulp.LpVariable(
-                f"batt_power_{t}",
-                lowBound=-self.battery.max_discharge_power,
-                upBound=self.battery.max_charge_power,
-            )
-            for t in range(n)
-        ]
-        soc = [pulp.LpVariable(f"soc_{t}", lowBound=0, upBound=1) for t in range(n + 1)]
+        
+        # Multi-storage: power and SoC variables for each storage
+        storage_power_dict = {}  # {storage_name: [power_vars]}
+        storage_soc_dict = {}    # {storage_name: [soc_vars]}
+        storage_slack_low_dict = {}  # {storage_name: [slack_vars]}
+        storage_slack_high_dict = {}  # {storage_name: [slack_vars]}
+        storage_passive_discharge_dict = {}  # {storage_name: passive_loss_kW}
+        
+        for storage in self.storages:
+            name = storage.name
+            storage_power_dict[name] = [
+                pulp.LpVariable(
+                    f"{name}_power_{t}",
+                    lowBound=-storage.max_discharge_power,
+                    upBound=storage.max_charge_power,
+                )
+                for t in range(n)
+            ]
+            storage_soc_dict[name] = [pulp.LpVariable(f"{name}_soc_{t}", lowBound=0, upBound=1) for t in range(n + 1)]
+            storage_slack_low_dict[name] = [pulp.LpVariable(f"{name}_soc_low_slack_{t}", lowBound=0) for t in range(n + 1)]
+            storage_slack_high_dict[name] = [pulp.LpVariable(f"{name}_soc_high_slack_{t}", lowBound=0) for t in range(n + 1)]
+            
+            constraints = storage.get_constraints()
+            storage_passive_discharge_dict[name] = constraints.get("passive_discharge_power", 0.0)
+            
+            # Initial SoC = measured current state
+            prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
+            
+            # SoC dynamics for this storage
+            passive_loss = storage_passive_discharge_dict[name]
+            for t in range(n):
+                prob += (
+                    storage_soc_dict[name][t + 1] == storage_soc_dict[name][t] + 
+                    (storage_power_dict[name][t] - passive_loss) * dt / storage.capacity,
+                    f"{name}_soc_dynamics_{t}",
+                )
+            
+            # Soft SoC bounds
+            for t in range(n + 1):
+                prob += storage_soc_dict[name][t] >= storage.min_soc - storage_slack_low_dict[name][t], f"{name}_soc_min_{t}"
+                prob += storage_soc_dict[name][t] <= storage.max_soc + storage_slack_high_dict[name][t], f"{name}_soc_max_{t}"
 
-        # Soft SoC-bound slack (allow violation at a penalty instead of infeasibility)
-        soc_low_slack = [pulp.LpVariable(f"soc_low_slack_{t}", lowBound=0) for t in range(n + 1)]
-        soc_high_slack = [pulp.LpVariable(f"soc_high_slack_{t}", lowBound=0) for t in range(n + 1)]
-
-        # Initial SoC = measured current state
-        prob += soc[0] == self.battery.current_soc, "initial_soc"
-
-        # Extract passive discharge once (used in both energy balance and SoC dynamics)
-        batt_constraints = self.battery.get_constraints()
-        passive_discharge = batt_constraints.get("passive_discharge_power", 0.0)
-
-        # SoC dynamics: soc[t+1] = soc[t] + (power_t - passive_loss) * dt / capacity
-        # (passive_loss is a power in kW, multiplied by dt to get energy in kWh)
+        # Energy balance: Grid + PV = Load + sum(all storages), at every t
         for t in range(n):
+            total_storage_power = pulp.lpSum(storage_power_dict[s.name][t] for s in self.storages)
             prob += (
-                soc[t + 1] == soc[t] + (batt_power[t] - passive_discharge) * dt / self.battery.capacity,
-                f"soc_dynamics_{t}",
-            )
-
-        # Soft SoC bounds
-        for t in range(n + 1):
-            prob += soc[t] >= self.battery.min_soc - soc_low_slack[t], f"soc_min_{t}"
-            prob += soc[t] <= self.battery.max_soc + soc_high_slack[t], f"soc_max_{t}"
-
-        # Energy balance: Grid + PV = Load + Battery, at every t
-        # (passive loss is internal to the battery, handled in SoC dynamics, not an external demand)
-        for t in range(n):
-            prob += (
-                (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + batt_power[t],
+                (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + total_storage_power,
                 f"energy_balance_{t}",
             )
 
@@ -193,7 +200,8 @@ class Optimizer:
             )
 
         penalty_term = self.soft_penalty * pulp.lpSum(
-            soc_low_slack[t] + soc_high_slack[t] for t in range(n + 1)
+            storage_slack_low_dict[s.name][t] + storage_slack_high_dict[s.name][t]
+            for s in self.storages for t in range(n + 1)
         )
 
         # Tie-breaking strategies: tiny weight so they never override the primary objective
@@ -232,16 +240,30 @@ class Optimizer:
 
         result.grid_import = np.array([val(v) for v in p_import])
         result.grid_export = np.array([val(v) for v in p_export])
-        result.battery_power = np.array([val(v) for v in batt_power])
-        result.battery_soc = np.array([val(v) for v in soc])
-        result.battery_passive_discharge = np.full(n, passive_discharge, dtype=float)
+        
+        # Multi-storage results
+        for storage in self.storages:
+            name = storage.name
+            result.storages[name] = {
+                "power": np.array([val(v) for v in storage_power_dict[name]]),
+                "soc": np.array([val(v) for v in storage_soc_dict[name]]),
+                "passive_discharge": np.full(n, storage_passive_discharge_dict[name], dtype=float),
+            }
 
         cost_energy = float(
             np.sum(result.grid_import * price_import - result.grid_export * price_export) * dt
         )
-        slack_low = np.array([val(v) for v in soc_low_slack])
-        slack_high = np.array([val(v) for v in soc_high_slack])
-        penalty_cost = float(self.soft_penalty * (slack_low.sum() + slack_high.sum()))
+        
+        total_slack_low = 0.0
+        total_slack_high = 0.0
+        for storage in self.storages:
+            name = storage.name
+            slack_low = np.array([val(v) for v in storage_slack_low_dict[name]])
+            slack_high = np.array([val(v) for v in storage_slack_high_dict[name]])
+            total_slack_low += slack_low.sum()
+            total_slack_high += slack_high.sum()
+        
+        penalty_cost = float(self.soft_penalty * (total_slack_low + total_slack_high))
 
         result.cost_energy = cost_energy
         result.cost_penalty = penalty_cost
@@ -250,24 +272,29 @@ class Optimizer:
         result.objective_value = float(obj_val) if obj_val is not None else None
 
         violations: List[Violation] = []
-        if slack_low.max(initial=0.0) > VIOLATION_EPS:
-            violations.append(
-                Violation(
-                    asset=self.battery.name,
-                    type="SoC below minimum",
-                    max_violation=float(slack_low.max()),
-                    penalty_cost=float(self.soft_penalty * slack_low.sum()),
+        for storage in self.storages:
+            name = storage.name
+            slack_low = np.array([val(v) for v in storage_slack_low_dict[name]])
+            slack_high = np.array([val(v) for v in storage_slack_high_dict[name]])
+            
+            if slack_low.max(initial=0.0) > VIOLATION_EPS:
+                violations.append(
+                    Violation(
+                        asset=name,
+                        type="SoC below minimum",
+                        max_violation=float(slack_low.max()),
+                        penalty_cost=float(self.soft_penalty * slack_low.sum()),
+                    )
                 )
-            )
-        if slack_high.max(initial=0.0) > VIOLATION_EPS:
-            violations.append(
-                Violation(
-                    asset=self.battery.name,
-                    type="SoC above maximum",
-                    max_violation=float(slack_high.max()),
-                    penalty_cost=float(self.soft_penalty * slack_high.sum()),
+            if slack_high.max(initial=0.0) > VIOLATION_EPS:
+                violations.append(
+                    Violation(
+                        asset=name,
+                        type="SoC above maximum",
+                        max_violation=float(slack_high.max()),
+                        penalty_cost=float(self.soft_penalty * slack_high.sum()),
+                    )
                 )
-            )
         result.violations = violations
 
         return result

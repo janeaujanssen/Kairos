@@ -157,7 +157,7 @@ Three concrete classes inherit from `Asset`:
   
 - **`Storage`**: Energy storage (Battery, thermal masses)
   - State: `current_soc` (State of Charge in % or thermal equivalent)
-  - Constraints: `capacity`, `min_soc`/`max_soc`, `max_charge_power`, `max_discharge_power`, `passive_discharge_power` (only for thermal storage; power loss due to heat loss)
+  - Constraints: `capacity`, `min_soc`/`max_soc`, `max_charge_power`, `max_discharge_power`, `passive_discharge_power` (only for DHW storage; power loss due to heat loss)
   - Forecast: (none)
   - Control: `set_power(kW)`
   
@@ -169,9 +169,88 @@ Three concrete classes inherit from `Asset`:
 
 This design ensures the optimizer can work with any asset type through a uniform interface.
 
-#### Building Thermal Mass as a Virtual Battery
+#### Storage Asset Concrete Examples
 
-The building thermal mass is abstracted as **virtual energy storage** using the same `Storage` interface as electrical batteries:
+All storage types use the same `Storage` class interface. Here are concrete examples showing how physical parameters translate to Storage asset values:
+
+**1. Home Battery (Electrical Energy Storage)**
+```python
+home_battery = Storage(
+    name="Home Battery",
+    current_soc=0.50,              # 50% charge
+    capacity=10.0,                 # 10 kWh usable
+    min_soc=0.10,                  # Health protection: don't go below 10%
+    max_soc=0.95,                  # Health protection: don't exceed 95%
+    max_charge_power=5.0,          # 5 kW charger limit
+    max_discharge_power=5.0,       # 5 kW inverter limit
+    passive_discharge_power=0.0,   # Negligible self-discharge over 24h
+)
+```
+
+**2. DHW Tank (Thermal Energy Storage)**
+```python
+# Physical parameters:
+# • 300-liter tank, 20°C to 60°C range (40°C ΔT)
+# • Current water temp: 50°C
+# • Heat loss coeff: 0.004 kW/K (modern insulation; range: 0.003-0.008)
+# • Min comfort temp for showers: 40°C
+
+dhw_tank = Storage(
+    name="DHW Tank",
+    current_soc=0.75,              # SoC = (50-20) / (60-20) = 0.75
+    capacity=13.96,                # 300L × 1.163 Wh/(L·K) × 40K / 1000
+    min_soc=0.50,                  # Comfort constraint: (40-20) / (60-20) = 0.50
+    max_soc=1,                     # Up to max temperature
+    max_charge_power=3.0,          # Heat pump thermal output (kW)
+    max_discharge_power=0.0,       # No active discharge (passive loss only)
+    passive_discharge_power=0.16,  # Heat loss at max temp: HLC × ΔT = 0.004 × 40 = 0.16 kW
+)
+```
+
+The DHW tank is abstracted as **virtual thermal energy storage** using the same `Storage` interface:
+
+- **State of Charge (SoC)**: Derived from measured water temperature: $\text{SoC} = \frac{T_{\text{water}} - T_{\text{min}}}{T_{\text{max}} - T_{\text{min}}}$
+  - Measured directly from tank temperature sensor
+  - Example: If T_min = 20°C (ambient temperature around the tank), T_max = 60°C (maximum safe), and current = 50°C → SoC = 0.75
+- **Capacity**: Calculated directly from tank volume: $E_{\text{max}} = V_{\text{tank}} \cdot 1.163 \cdot (T_{\text{max}} - T_{\text{min}}) / 1000$
+  - $V_{\text{tank}}$ = water volume in liters
+  - 1.163 Wh/(liter·K) = specific heat of water
+  - Example: 300-liter tank, 40°C temperature range (20–60°C) → ~13.8 kWh capacity
+- **Self-discharge (Heat Loss)**: Heat naturally flows out via tank insulation: $Q_{\text{loss}} = \text{HLC}_{\text{tank}} \cdot (T_{\text{water}} - 20°C)$
+  - HLC_tank = tank heat loss coefficient (kW/K)
+  - Ambient temperature fixed at 20°C (room temperature inside house)
+- **Min SoC Constraint**: Rather than forecasting hot water demand, define a minimum acceptable SoC representing sufficient water for basic use (e.g., showers at 40°C):
+  - Optimizer maintains SoC ≥ min_soc, ensuring sufficient hot water is always available
+  - Example: For 40°C minimum comfort temperature, min_soc = (40 − 20) / (60 − 20) = 0.5
+- **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a DHW temperature setpoint:
+  - Positive power (e.g., +3 kW): Charge the tank (pre-heating water)
+  - Zero power: Maintain current temperature (offset losses only)
+  - The translation layer converts requested power to DHW setpoint: $T_{\text{setpoint}} = T_{\text{baseline}} + K_{\text{dhw}} \cdot P_{\text{thermal}}$, where $K_{\text{dhw}}$ is the temperature gain factor
+
+Like the building, the optimizer is completely hardware-agnostic; the heat pump's actual DHW control (setpoint adjustment, three-way valve routing) is handled by the translation layer.
+
+**3. Building Thermal Mass (Space Heating Storage)**
+```python
+# Physical parameters:
+# • Thermal capacitance: 25 kWh/K (larger residential building; range: 5-30 depending on size/mass)
+# • Thermal time constant: ~8 hours (time to cooldown 1°C when heating is off)
+# • Baseline temp: 20°C (maintained by weather compensation)
+# • Max comfort temp: 21°C
+# • Current indoor temp: 20.5°C
+
+building_thermal = Storage(
+    name="Building Thermal Mass",
+    current_soc=0.50,              # SoC = (20.5-20) / (21-20) = 0.50
+    capacity=25.0,                 # 25 kWh/K × (21-20)K = 25 kWh
+    min_soc=0.0,                   # Allow full discharge to baseline
+    max_soc=1.0,                   # Allow full charge to comfort limit
+    max_charge_power=5.0,          # Heat pump active pre-heating (kW)
+    max_discharge_power=3.1,       # Passive cooling with heat pump off: capacity / time_constant = 25 kWh / 8h = 3.1 kW
+    passive_discharge_power=0.0,   # Weather curve handles baseline losses
+)
+```
+
+The building thermal mass is abstracted as **virtual energy storage** using the same `Storage` interface.
 
 - **State of Charge (SoC)**: Derived from measured temperature: $\text{SoC} = \frac{T_{\text{indoor}} - T_{\text{baseline}}}{T_{\text{max}} - T_{\text{baseline}}}$
   - Measured directly, eliminating accumulated estimation error
@@ -203,33 +282,22 @@ The building thermal mass is abstracted as **virtual energy storage** using the 
   - **During expensive periods or low solar**: Lower curve offset (-ΔT) to reduce active heating, letting stored thermal energy offset the load
   - Translation layer calibrates the relationship between curve offset (ΔT) and actual power
 
-#### DHW Tank as a Virtual Battery
+**4. EV Battery (Vehicle Energy Storage)**
+```python
+ev_battery = Storage(
+    name="EV Battery",
+    current_soc=0.50,              # 30 kWh / 60 kWh = 50%
+    capacity=60.0,                 # 60 kWh usable
+    min_soc=0.10,                  # Health protection: 10% minimum
+    max_soc=0.90,                  # Health protection: 90% maximum
+    max_charge_power=7.0,          # AC charger limit (kW)
+    max_discharge_power=3.0,       # V2G capability (kW)
+    passive_discharge_power=0.0,   # Negligible self-discharge
+)
+# Note: Departure time SoC goal (e.g., 80% by 08:00) is enforced as separate constraint
+```
 
-The DHW tank is abstracted as **virtual thermal energy storage** using the same `Storage` interface as the building thermal mass:
-
-- **State of Charge (SoC)**: Derived from measured water temperature: $\text{SoC} = \frac{T_{\text{water}} - T_{\text{min}}}{T_{\text{max}} - T_{\text{min}}}$
-  - Measured directly from tank temperature sensor
-  - Example: If T_min = 20°C (ambient temperature around the tank), T_max = 60°C (maximum safe), and current = 50°C → SoC = 0.75
-- **Capacity**: Calculated directly from tank volume: $E_{\text{max}} = V_{\text{tank}} \cdot 1.163 \cdot (T_{\text{max}} - T_{\text{min}}) / 1000$
-  - $V_{\text{tank}}$ = water volume in liters
-  - 1.163 Wh/(liter·K) = specific heat of water
-  - Example: 300-liter tank, 40°C temperature range (20–60°C) → ~13.8 kWh capacity
-- **Self-discharge (Heat Loss)**: Heat naturally flows out via tank insulation: $Q_{\text{loss}} = \text{HLC}_{\text{tank}} \cdot (T_{\text{water}} - 20°C)$
-  - HLC_tank = tank heat loss coefficient (kW/K)
-  - Ambient temperature fixed at 20°C (room temperature inside house)
-- **Min SoC Constraint**: Rather than forecasting hot water demand, define a minimum acceptable SoC representing sufficient water for basic use (e.g., showers at 40°C):
-  - Optimizer maintains SoC ≥ min_soc, ensuring sufficient hot water is always available
-  - Example: For 40°C minimum comfort temperature, min_soc = (40 − 20) / (60 − 20) = 0.5
-- **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a DHW temperature setpoint:
-  - Positive power (e.g., +3 kW): Charge the tank (pre-heating water)
-  - Zero power: Maintain current temperature (offset losses only)
-  - The translation layer converts requested power to DHW setpoint: $T_{\text{setpoint}} = T_{\text{baseline}} + K_{\text{dhw}} \cdot P_{\text{thermal}}$, where $K_{\text{dhw}}$ is the temperature gain factor
-
-Like the building, the optimizer is completely hardware-agnostic; the heat pump's actual DHW control (setpoint adjustment, three-way valve routing) is handled by the translation layer.
-
-#### EV Battery as a Virtual Battery
-
-The EV battery is abstracted as **virtual energy storage** using the same `Storage` interface as the home battery:
+The EV battery is abstracted as **virtual energy storage** using the same `Storage` interface.
 
 - **State of Charge (SoC)**: Energy stored as a fraction of capacity: $\text{SoC} = \frac{E_{\text{stored}}}{E_{\text{capacity}}}$
   - Measured directly from vehicle battery management system
@@ -329,6 +397,7 @@ Plotting functions generate interactive charts using Plotly, both to visualize i
       - **PV production forecast**: Bell curve peaking at solar noon (midday), zero at night
       - **Load demand forecast**: Baseline consumption + morning peak (e.g., 7am) + evening peak (e.g., 7pm)
     - **Control parameter**: Indication of what the optimizer will set for the asset (no user input)
+    - For the storage assets that need a conversion from physical parameters to standard battery parameters, there is a separate top section where these physical parameters can be edited. The dependent battery parameters should be locked for editing.
   - Make sure that sections and subsections can be clearly identified.
 
 - **Optimization Tab**: Results and solver diagnostics

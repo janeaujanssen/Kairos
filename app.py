@@ -65,6 +65,10 @@ charging_priority = st.sidebar.checkbox(
     help="Among equal-cost solutions, prefer charging the battery over exporting excess PV.",
 )
 
+st.sidebar.subheader("Assets")
+battery_1_enabled = st.sidebar.checkbox("🔋 Battery 1", value=True)
+battery_2_enabled = st.sidebar.checkbox("🔋 Battery 2", value=False)
+
 st.sidebar.subheader("Configuration")
 mode_label = st.sidebar.selectbox(
     "Optimization mode", ["Cost optimization", "Self-consumption"], index=0,
@@ -167,24 +171,24 @@ with tab_inputs:
 
     st.header("Storage")
 
-    # --- Home Battery ---
-    with st.expander("🔋 Home Battery", expanded=True):
+    # --- Home Battery 1 ---
+    with st.expander("🔋 Battery 1", expanded=True):
         st.markdown("**Current state** *(measured, t=0)*")
-        battery_current_soc = st.slider("Current SoC (%)", 0, 100, 50, key="battery_current_soc") / 100.0
+        battery1_current_soc = st.slider("Current SoC (%)", 0, 100, 50, key="battery1_current_soc") / 100.0
 
         st.markdown("**Constraints**")
         c1, c2 = st.columns(2)
-        battery_capacity = c1.number_input("Energy capacity (kWh)", value=10.0, min_value=0.1, key="battery_capacity")
-        battery_min_soc, battery_max_soc = c2.slider(
-            "Min / max SoC (%)", 0, 100, (10, 95), key="battery_soc_range",
+        battery1_capacity = c1.number_input("Energy capacity (kWh)", value=10.0, min_value=0.1, key="battery1_capacity")
+        battery1_min_soc, battery1_max_soc = c2.slider(
+            "Min / max SoC (%)", 0, 100, (10, 95), key="battery1_soc_range",
         )
-        battery_min_soc, battery_max_soc = battery_min_soc / 100.0, battery_max_soc / 100.0
+        battery1_min_soc, battery1_max_soc = battery1_min_soc / 100.0, battery1_max_soc / 100.0
         c1, c2 = st.columns(2)
-        battery_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery_max_charge")
-        battery_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery_max_discharge")
-        battery_passive_discharge = st.number_input(
+        battery1_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery1_max_charge")
+        battery1_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery1_max_discharge")
+        battery1_passive_discharge = st.number_input(
             "Passive discharge power (kW)", value=0.0, min_value=0.0, step=0.001,
-            key="battery_passive_discharge",
+            key="battery1_passive_discharge",
             help="Power lost due to self-discharge or standby losses (kW). For electrical batteries, typically 0."
         )
 
@@ -193,6 +197,42 @@ with tab_inputs:
 
         st.markdown("**Control**")
         st.caption("Battery Charge/Discharge Power (kW) — set by the optimizer.")
+
+    # --- Home Battery 2 ---
+    if battery_2_enabled:
+        with st.expander("🔋 Battery 2", expanded=True):
+            st.markdown("**Current state** *(measured, t=0)*")
+            battery2_current_soc = st.slider("Current SoC (%)", 0, 100, 30, key="battery2_current_soc") / 100.0
+
+            st.markdown("**Constraints**")
+            c1, c2 = st.columns(2)
+            battery2_capacity = c1.number_input("Energy capacity (kWh)", value=5.0, min_value=0.1, key="battery2_capacity")
+            battery2_min_soc, battery2_max_soc = c2.slider(
+                "Min / max SoC (%)", 0, 100, (10, 95), key="battery2_soc_range",
+            )
+            battery2_min_soc, battery2_max_soc = battery2_min_soc / 100.0, battery2_max_soc / 100.0
+            c1, c2 = st.columns(2)
+            battery2_max_charge = c1.number_input("Max charge power (kW)", value=3.0, min_value=0.0, key="battery2_max_charge")
+            battery2_max_discharge = c2.number_input("Max discharge power (kW)", value=3.0, min_value=0.0, key="battery2_max_discharge")
+            battery2_passive_discharge = st.number_input(
+                "Passive discharge power (kW)", value=0.0, min_value=0.0, step=0.001,
+                key="battery2_passive_discharge",
+                help="Power lost due to self-discharge or standby losses (kW)."
+            )
+
+            st.markdown("**Forecast**")
+            st.caption("— None; battery behavior is determined entirely by the optimizer.")
+
+            st.markdown("**Control**")
+            st.caption("Battery Charge/Discharge Power (kW) — set by the optimizer.")
+    else:
+        battery2_current_soc = 0.0
+        battery2_capacity = 0.0
+        battery2_min_soc = 0.0
+        battery2_max_soc = 1.0
+        battery2_max_charge = 0.0
+        battery2_max_discharge = 0.0
+        battery2_passive_discharge = 0.0
 
     st.header("Loads")
 
@@ -240,12 +280,25 @@ pv = Source(
     "PV", current_power=pv_current_power,
     power_forecast=with_measured_start(pv_forecast_full, pv_current_power),
 )
-battery = Storage(
-    "Home Battery", current_soc=battery_current_soc, capacity=battery_capacity,
-    min_soc=battery_min_soc, max_soc=battery_max_soc,
-    max_charge_power=battery_max_charge, max_discharge_power=battery_max_discharge,
-    passive_discharge_power=battery_passive_discharge,
-)
+
+# Build list of enabled storages
+storages = []
+if battery_1_enabled:
+    storages.append(Storage(
+        "Battery 1", current_soc=battery1_current_soc, capacity=battery1_capacity,
+        min_soc=battery1_min_soc, max_soc=battery1_max_soc,
+        max_charge_power=battery1_max_charge, max_discharge_power=battery1_max_discharge,
+        passive_discharge_power=battery1_passive_discharge,
+    ))
+
+if battery_2_enabled:
+    storages.append(Storage(
+        "Battery 2", current_soc=battery2_current_soc, capacity=battery2_capacity,
+        min_soc=battery2_min_soc, max_soc=battery2_max_soc,
+        max_charge_power=battery2_max_charge, max_discharge_power=battery2_max_discharge,
+        passive_discharge_power=battery2_passive_discharge,
+    ))
+
 load = Load(
     "Home Consumption", current_power=load_current_power,
     power_forecast=with_measured_start(load_forecast_full, load_current_power),
@@ -255,22 +308,29 @@ load = Load(
 # Run optimization (local + optional EVCC) on button click
 # ----------------------------------------------------------------------------
 if run_clicked:
-    with st.spinner("Solving..."):
-        opt = Optimizer(
-            grid, pv, battery, load, hours, dt_hours,
-            mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
-            solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
-            soft_penalty=soft_penalty,
-        )
-        st.session_state.result = opt.solve()
-
-        if evcc_enabled:
-            st.session_state.evcc_result = run_evcc_optimization(
-                grid, pv, battery, load, dt_hours, base_url=evcc_url,
-                prc_p_exc_imp=evcc_prc_p_exc_imp,
+    if not storages:
+        st.error("❌ Please enable at least one storage asset in the sidebar.")
+    else:
+        with st.spinner("Solving..."):
+            opt = Optimizer(
+                grid, pv, storages, load, hours, dt_hours,
+                mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
+                solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
+                soft_penalty=soft_penalty,
             )
-        else:
-            st.session_state.evcc_result = None
+            st.session_state.result = opt.solve()
+
+            if evcc_enabled:
+                # EVCC integration now supports multiple storages (batteries)
+                if storages:
+                    st.session_state.evcc_result = run_evcc_optimization(
+                        grid, pv, storages, load, dt_hours, base_url=evcc_url,
+                        prc_p_exc_imp=evcc_prc_p_exc_imp,
+                    )
+                else:
+                    st.session_state.evcc_result = None
+            else:
+                st.session_state.evcc_result = None
 
 # ============================================================================
 # OPTIMIZATION TAB
@@ -325,17 +385,22 @@ with tab_optimization:
             m3.metric("Total cost", f"€{result.cost_total:.2f}")
 
             st.markdown("**Current control commands (t=0)**")
-            ctrl = result.control_at_t0()
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Battery power", f"{ctrl.get('battery_power_kw', 0):.2f} kW")
-            c2.metric("Grid import", f"{ctrl.get('grid_import_kw', 0):.2f} kW")
-            c3.metric("Grid export", f"{ctrl.get('grid_export_kw', 0):.2f} kW")
+            ctrl_cols = st.columns(len(result.storages) + 2)
+            for i, (storage_name, storage_data) in enumerate(result.storages.items()):
+                with ctrl_cols[i]:
+                    power_t0 = storage_data["power"][0] if len(storage_data["power"]) > 0 else 0.0
+                    st.metric(f"{storage_name} power", f"{power_t0:.2f} kW")
+            with ctrl_cols[len(result.storages)]:
+                st.metric("Grid import", f"{result.grid_import[0]:.2f} kW")
+            with ctrl_cols[len(result.storages) + 1]:
+                st.metric("Grid export", f"{result.grid_export[0]:.2f} kW")
 
             st.plotly_chart(
                 viz.plot_power_flow(
                     result.hours, result.grid_import, result.grid_export,
-                    result.pv_power, result.battery_power, result.load_power,
-                    result.price_import, result.price_export,
+                    result.pv_power, load_power=result.load_power,
+                    price_import=result.price_import, price_export=result.price_export,
+                    storage_dict={name: data["power"] for name, data in result.storages.items()},
                 ),
                 width='stretch', key="chart_power_flow_local",
             )
@@ -346,9 +411,20 @@ with tab_optimization:
                 ),
                 width='stretch', key="chart_cost_local",
             )
+            
+            # Multi-storage SoC trajectories
             hours_ext = np.append(result.hours, result.hours[-1] + dt_hours) if len(result.hours) else result.hours
+            
+            # Get min/max SoC for each storage
+            soc_bounds = {}
+            for storage in storages:
+                soc_bounds[storage.name] = (storage.min_soc, storage.max_soc)
+            
+            # Build dict for visualization: {storage_name: soc_array}
+            soc_dict = {name: data["soc"] for name, data in result.storages.items()}
+            
             st.plotly_chart(
-                viz.plot_soc_trajectory(hours_ext, result.battery_soc, battery_min_soc, battery_max_soc),
+                viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds),
                 width='stretch', key="chart_soc_local",
             )
 
@@ -394,41 +470,59 @@ with tab_optimization:
                         m1.metric("Calculated energy cost", f"€{energy_cost_evcc:.2f}")
                         m2.metric("Objective value", f"€{evcc_result.objective_value:.2f}")
 
-                    if len(evcc_result.battery_power):
+                    if evcc_result.storages:
                         st.markdown("**Current control commands (t=0)**")
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Battery power", f"{evcc_result.battery_power[0]:.2f} kW")
-                        c2.metric("Grid import", f"{evcc_result.grid_import[0]:.2f} kW" if len(evcc_result.grid_import) else "—")
-                        c3.metric("Grid export", f"{evcc_result.grid_export[0]:.2f} kW" if len(evcc_result.grid_export) else "—")
+                        # Get slice length from first storage
+                        first_storage_power = next(iter(evcc_result.storages.values()))["power"]
+                        n_evcc = len(first_storage_power)
+                        
+                        # Display metrics for all storages
+                        ctrl_cols = st.columns(len(evcc_result.storages) + 2)
+                        for i, (storage_name, storage_data) in enumerate(evcc_result.storages.items()):
+                            with ctrl_cols[i]:
+                                power_t0 = storage_data["power"][0] if len(storage_data["power"]) > 0 else 0.0
+                                st.metric(f"{storage_name} power", f"{power_t0:.2f} kW")
+                        with ctrl_cols[len(evcc_result.storages)]:
+                            st.metric("Grid import", f"{evcc_result.grid_import[0]:.2f} kW" if len(evcc_result.grid_import) else "—")
+                        with ctrl_cols[len(evcc_result.storages) + 1]:
+                            st.metric("Grid export", f"{evcc_result.grid_export[0]:.2f} kW" if len(evcc_result.grid_export) else "—")
 
                         st.plotly_chart(
                             viz.plot_power_flow(
-                                result.hours[: len(evcc_result.battery_power)],
+                                result.hours[:n_evcc],
                                 evcc_result.grid_import, evcc_result.grid_export,
-                                result.pv_power[: len(evcc_result.battery_power)],
-                                evcc_result.battery_power,
-                                result.load_power[: len(evcc_result.battery_power)],
-                                result.price_import[: len(evcc_result.battery_power)],
-                                result.price_export[: len(evcc_result.battery_power)],
+                                result.pv_power[:n_evcc],
+                                load_power=result.load_power[:n_evcc],
+                                price_import=result.price_import[:n_evcc],
+                                price_export=result.price_export[:n_evcc],
+                                storage_dict={name: data["power"] for name, data in evcc_result.storages.items()},
                             ),
                             width='stretch', key="chart_power_flow_evcc",
                         )
                         st.plotly_chart(
                             viz.plot_cost_analysis(
-                                result.hours[: len(evcc_result.battery_power)],
+                                result.hours[:n_evcc],
                                 evcc_result.grid_import, evcc_result.grid_export,
-                                result.price_import[: len(evcc_result.battery_power)],
-                                result.price_export[: len(evcc_result.battery_power)],
+                                result.price_import[:n_evcc],
+                                result.price_export[:n_evcc],
                             ),
                             width='stretch', key="chart_cost_evcc",
                         )
-                        if len(evcc_result.battery_soc):
+                        
+                        # Multi-storage SoC trajectories from EVCC
+                        if evcc_result.storages:
+                            hours_ext_evcc = np.append(result.hours[:n_evcc], result.hours[n_evcc - 1] + dt_hours) if n_evcc > 0 else np.array([])
+                            
+                            # Get min/max SoC bounds for each storage
+                            soc_bounds_evcc = {}
+                            for storage in storages:
+                                soc_bounds_evcc[storage.name] = (storage.min_soc, storage.max_soc)
+                            
+                            # Build dict for visualization: {storage_name: soc_array}
+                            soc_dict_evcc = {name: data["soc"] for name, data in evcc_result.storages.items()}
+                            
                             st.plotly_chart(
-                                viz.plot_soc_trajectory(
-                                    result.hours[: len(evcc_result.battery_soc)],
-                                    evcc_result.battery_soc, battery_min_soc, battery_max_soc,
-                                    name="EVCC battery SoC",
-                                ),
+                                viz.plot_soc_trajectory_multi(hours_ext_evcc, soc_dict_evcc, soc_bounds_evcc),
                                 width='stretch', key="chart_soc_evcc",
                             )
                     else:

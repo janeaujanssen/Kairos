@@ -56,18 +56,23 @@ def plot_power_flow(
     grid_import: np.ndarray,
     grid_export: np.ndarray,
     pv_power: np.ndarray,
-    battery_power: np.ndarray,
-    load_power: np.ndarray,
+    battery_power: np.ndarray = None,
+    load_power: np.ndarray = None,
     price_import: np.ndarray = None,
     price_export: np.ndarray = None,
+    storage_dict: dict = None,
 ) -> go.Figure:
-    """Hybrid power flow chart showing energy balance: Grid + PV = Load + Storage.
+    """Hybrid power flow chart showing energy balance: Grid + PV = Load + Storage(s).
     
     Supply side (lines): Grid Power (net) and PV Power shown as separate line traces.
-    Demand side (stacked bars): Load Power and Battery Power as separate bar traces.
-    With barmode="relative": same-signed bars stack together (e.g. Load + Battery charging),
-    while discharging Battery (negative) stacks separately below zero.
+    Demand side (stacked bars): Load Power and Storage Power(s) as separate bar traces.
+    With barmode="relative": same-signed bars stack together (e.g. Load + Storage charging),
+    while discharging Storage (negative) stacks separately below zero.
     Prices shown as secondary y-axis lines (if provided).
+    
+    Args:
+        storage_dict: Optional {storage_name: power_array} for multiple storages.
+                      If provided, battery_power is ignored.
     """
     # Calculate net grid power (positive = import, negative = export)
     net_grid_power = grid_import - grid_export
@@ -97,28 +102,47 @@ def plot_power_flow(
         secondary_y=False
     )
     
-    # DEMAND SIDE: Load and Battery as separate stacked bars.
+    # DEMAND SIDE: Load and Storage(s) as separate stacked bars.
     # barmode="relative" stacks positive values together and negative values together,
-    # so discharging battery never stacks on top of Load.
-    fig.add_trace(
-        go.Bar(
-            x=hours, y=load_power,
-            name="Home Load",
-            marker=dict(color="#1f77b4"),
-            hovertemplate="<b>Home Load</b><br>%{y:.2f} kW<extra></extra>",
-        ),
-        secondary_y=False
-    )
+    # so discharging storage never stacks on top of Load.
+    if load_power is not None:
+        fig.add_trace(
+            go.Bar(
+                x=hours, y=load_power,
+                name="Home Load",
+                marker=dict(color="#1f77b4"),
+                hovertemplate="<b>Home Load</b><br>%{y:.2f} kW<extra></extra>",
+            ),
+            secondary_y=False
+        )
     
-    fig.add_trace(
-        go.Bar(
-            x=hours, y=battery_power,
-            name="Battery (+charge/-discharge)",
-            marker=dict(color="#9467bd"),
-            hovertemplate="<b>Battery</b><br>%{y:.2f} kW<extra></extra>",
-        ),
-        secondary_y=False
-    )
+    # Plot storage(s)
+    storage_colors = ["#9467bd", "#ff7f0e", "#2ca02c", "#d62728"]
+    
+    if storage_dict:
+        # Multiple storages: plot each with different color
+        for i, (storage_name, power_array) in enumerate(storage_dict.items()):
+            color = storage_colors[i % len(storage_colors)]
+            fig.add_trace(
+                go.Bar(
+                    x=hours, y=power_array,
+                    name=f"{storage_name} (+charge/-discharge)",
+                    marker=dict(color=color),
+                    hovertemplate=f"<b>{storage_name}</b><br>" + "%{y:.2f} kW<extra></extra>",
+                ),
+                secondary_y=False
+            )
+    elif battery_power is not None:
+        # Legacy single battery
+        fig.add_trace(
+            go.Bar(
+                x=hours, y=battery_power,
+                name="Battery (+charge/-discharge)",
+                marker=dict(color="#9467bd"),
+                hovertemplate="<b>Battery</b><br>%{y:.2f} kW<extra></extra>",
+            ),
+            secondary_y=False
+        )
     
     # Optional: Add price traces on secondary y-axis if provided
     if price_import is not None:
@@ -169,57 +193,41 @@ def plot_power_flow(
     return fig
 
 
-def plot_soc_trajectory(
+
+
+def plot_soc_trajectory_multi(
     hours_extended: np.ndarray,
-    soc: np.ndarray,
-    min_soc: float,
-    max_soc: float,
-    name: str = "Battery SoC",
-    additional_socs: dict = None,
+    soc_dict: dict,
+    bounds_dict: dict,
 ) -> go.Figure:
-    """Plot state of charge trajectories for storage assets.
+    """Plot SoC trajectories for multiple storage assets.
     
     Args:
         hours_extended: Time array (includes t=0 through t=T)
-        soc: Primary storage SoC array (normalized 0-1)
-        min_soc: Minimum SoC limit for primary storage
-        max_soc: Maximum SoC limit for primary storage
-        name: Name of primary storage asset
-        additional_socs: Optional dict of {asset_name: (soc_array, min_soc, max_soc)}
+        soc_dict: {storage_name: soc_array} where soc_array is normalized 0-1
+        bounds_dict: {storage_name: (min_soc, max_soc)} with normalized bounds
     """
     fig = go.Figure()
     
     # Color palette for multiple storage assets
     colors = ["#9467bd", "#ff7f0e", "#2ca02c", "#d62728", "#1f77b4"]
     
-    # Plot primary storage
-    fig.add_trace(
-        go.Scatter(
-            x=hours_extended, y=soc * 100, mode="lines+markers",
-            name=name, line=dict(color=colors[0], width=2),
-            hovertemplate="<b>" + name + "</b><br>%{y:.1f}%<extra></extra>",
-        )
-    )
-    fig.add_hline(y=min_soc * 100, line_dash="dot", line_color=colors[0],
-                  annotation_text=f"{name} min", annotation_position="right")
-    fig.add_hline(y=max_soc * 100, line_dash="dot", line_color=colors[0],
-                  annotation_text=f"{name} max", annotation_position="right")
-    
-    # Plot additional storage assets if provided
-    if additional_socs:
-        for i, (asset_name, (asset_soc, asset_min, asset_max)) in enumerate(additional_socs.items(), 1):
-            color = colors[i % len(colors)]
-            fig.add_trace(
-                go.Scatter(
-                    x=hours_extended, y=asset_soc * 100, mode="lines+markers",
-                    name=asset_name, line=dict(color=color, width=2),
-                    hovertemplate="<b>" + asset_name + "</b><br>%{y:.1f}%<extra></extra>",
-                )
+    # Plot each storage asset
+    for i, (storage_name, soc_array) in enumerate(soc_dict.items()):
+        color = colors[i % len(colors)]
+        min_soc, max_soc = bounds_dict.get(storage_name, (0.0, 1.0))
+        
+        fig.add_trace(
+            go.Scatter(
+                x=hours_extended, y=soc_array * 100, mode="lines+markers",
+                name=storage_name, line=dict(color=color, width=2),
+                hovertemplate="<b>" + storage_name + "</b><br>%{y:.1f}%<extra></extra>",
             )
-            fig.add_hline(y=asset_min * 100, line_dash="dot", line_color=color,
-                          annotation_text=f"{asset_name} min", annotation_position="right")
-            fig.add_hline(y=asset_max * 100, line_dash="dot", line_color=color,
-                          annotation_text=f"{asset_name} max", annotation_position="right")
+        )
+        fig.add_hline(y=min_soc * 100, line_dash="dot", line_color=color,
+                      annotation_text=f"{storage_name} min", annotation_position="right")
+        fig.add_hline(y=max_soc * 100, line_dash="dot", line_color=color,
+                      annotation_text=f"{storage_name} max", annotation_position="right")
     
     fig.update_yaxes(range=[-5, 105])
     
@@ -234,8 +242,6 @@ def plot_soc_trajectory(
     )
     
     return fig
-
-
 
 
 def plot_cost_analysis(
