@@ -12,8 +12,8 @@
 | Component | State | Constraints | Forecast | Control |
 |-----------|-------|-------------|----------|---------|
 | **Home Battery** | SoC | • Energy capacity<br>• Min/Max SoC<br>• Max charge/discharge power | — | Battery Charge/Discharge Power |
-| **DHW Tank** | Thermal SoC<br>(based on water temp) | • Thermal capacity<br>• Min/Max temperature | Hot water Energy demand | — |
-| **Building Thermal Mass** | Thermal SoC<br>(based on indoor temp) | • Thermal capacity<br>• Min/Max comfort temperature | • Outdoor temp<br>• Solar gains | — |
+| **DHW Tank** | Thermal SoC<br>(based on water temp) | • Thermal capacity<br>• Min/Max temperature<br>• Max charge/discharge power | Hot water demand forecast | Thermal Power<br>(via heat pump setpoint) |
+| **Building Thermal Mass** | Thermal SoC<br>(based on indoor temp) | • Thermal capacity<br>• Min/Max comfort temperature<br>• Max charge/discharge power | • Outdoor temp<br>• Solar gains | Thermal Power<br>(via heat pump offset) |
 | **EV Battery** | EV SoC | • Energy capacity<br>• Desired SoC at departure<br>• Max charge/discharge power | Arrival/departure time | Battery Charge/Discharge Power |
 
 ## Loads
@@ -31,7 +31,6 @@
 ### Neglected
 
 - **Efficiencies / losses**: battery round-trip efficiency & self-discharge, EV charger AC/DC efficiency, DHW tank and building heat-loss coefficients.
-- **DHW/building thermal mass control**: Controlled via heat pump.
 
 ### Not a Concern
 
@@ -166,6 +165,88 @@ Three concrete classes inherit from `Asset`:
   - Control: `set_on_off(Boolean)` (only for controllable loads; None for fixed loads)
 
 This design ensures the optimizer can work with any asset type through a uniform interface.
+
+#### Building Thermal Mass as a Virtual Battery
+
+The building thermal mass is abstracted as **virtual energy storage** using the same `Storage` interface as electrical batteries:
+
+- **State of Charge (SoC)**: Derived from measured temperature: $\text{SoC} = \frac{T_{\text{indoor}} - T_{\text{min}}}{T_{\text{max}} - T_{\text{min}}}$
+  - Measured directly, eliminating accumulated estimation error
+- **Capacity**: Thermal energy storage within comfort range: $E_{\text{max}} = C_{\text{building}} \cdot (T_{\text{max}} - T_{\text{min}})$
+  - $C_{\text{building}}$ = thermal capacitance (kWh/K): energy needed to raise building temperature by 1°C
+- **Self-discharge (Heat Loss)**: Heat naturally flows out via envelope: $Q_{\text{loss}} = \text{HLC} \cdot (T_{\text{indoor}} - T_{\text{outdoor}})$
+  - HLC = heat loss coefficient (kW/K): thermal power lost per 1°C difference between indoor and outdoor
+  - Forecasted using outdoor temperature and building heat loss coefficient
+- **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a heat pump heating curve offset via a translation layer:
+  - Positive power (e.g., +2 kW): Charge the thermal mass (pre-heating)
+  - Zero power: Neutral (weather compensation mode maintains baseline temperature)
+  - Negative power (e.g., −1 kW): Discharge the thermal mass (allow building to cool)
+  - The translation layer converts requested power to heating curve offset: $\Delta T_{\text{curve}} = K \cdot P_{\text{thermal}}$, where $K$ is an empirical gain factor (K/kW)
+
+The optimizer remains completely hardware-agnostic; actual heat pump control (weather compensation mode, heating curve adjustment) is handled by a separate translation layer that converts requested thermal power into physical commands.
+
+#### DHW Tank as a Virtual Battery
+
+The DHW tank is abstracted as **virtual thermal energy storage** using the same `Storage` interface as the building thermal mass:
+
+- **State of Charge (SoC)**: Derived from measured water temperature: $\text{SoC} = \frac{T_{\text{water}} - T_{\text{min}}}{T_{\text{max}} - T_{\text{min}}}$
+  - Measured directly from tank temperature sensor
+  - Example: If T_min = 20°C (ambient temperature around the tank), T_max = 60°C (maximum safe), and current = 50°C → SoC = 0.75
+- **Capacity**: Calculated directly from tank volume: $E_{\text{max}} = V_{\text{tank}} \cdot 1.163 \cdot (T_{\text{max}} - T_{\text{min}}) / 1000$
+  - $V_{\text{tank}}$ = water volume in liters
+  - 1.163 Wh/(liter·K) = specific heat of water
+  - Example: 300-liter tank, 40°C temperature range (20–60°C) → ~13.8 kWh capacity
+- **Self-discharge (Heat Loss)**: Heat naturally flows out via tank insulation: $Q_{\text{loss}} = \text{HLC}_{\text{tank}} \cdot (T_{\text{water}} - 20°C)$
+  - HLC_tank = tank heat loss coefficient (kW/K)
+  - Ambient temperature fixed at 20°C (room temperature inside house)
+- **Min SoC Constraint**: Rather than forecasting hot water demand, define a minimum acceptable SoC representing sufficient water for basic use (e.g., showers at 40°C):
+  - Optimizer maintains SoC ≥ min_soc, ensuring sufficient hot water is always available
+  - Example: For 40°C minimum comfort temperature, min_soc = (40 − 20) / (60 − 20) = 0.5
+- **Control**: Optimizer sets thermal power (kW) via `set_power()`, which maps to a DHW temperature setpoint:
+  - Positive power (e.g., +3 kW): Charge the tank (pre-heating water)
+  - Zero power: Maintain current temperature (offset losses only)
+  - The translation layer converts requested power to DHW setpoint: $T_{\text{setpoint}} = T_{\text{baseline}} + K_{\text{dhw}} \cdot P_{\text{thermal}}$, where $K_{\text{dhw}}$ is the temperature gain factor
+
+Like the building, the optimizer is completely hardware-agnostic; the heat pump's actual DHW control (setpoint adjustment, three-way valve routing) is handled by the translation layer.
+
+#### EV Battery as a Virtual Battery
+
+The EV battery is abstracted as **virtual energy storage** using the same `Storage` interface as the home battery:
+
+- **State of Charge (SoC)**: Energy stored as a fraction of capacity: $\text{SoC} = \frac{E_{\text{stored}}}{E_{\text{capacity}}}$
+  - Measured directly from vehicle battery management system
+  - Example: If capacity = 60 kWh and stored = 30 kWh → SoC = 0.5
+- **Capacity**: Total usable energy in the battery: $E_{\text{capacity}}$ (kWh)
+  - Vehicle-specific parameter, typically provided by manufacturer
+  - Example: 60 kWh usable capacity
+- **Charge/Discharge Power Limits**: Set by charger hardware and vehicle battery management
+  - $P_{\text{charge, max}}$ (kW): Maximum AC power accepted by on-board charger
+  - $P_{\text{discharge, max}}$ (kW): Maximum power for vehicle-to-grid (V2G) if supported; zero if V2G not available
+- **Time-Dependent Constraint**: Vehicle departure time creates a hard deadline for SoC:
+  - Desired SoC at departure: $\text{SoC}_{\text{goal}}$ at time $t_{\text{departure}}$
+  - Optimizer must ensure: $\text{SoC}(t_{\text{departure}}) \geq \text{SoC}_{\text{goal}}$
+  - Example: Vehicle departs at 8:00 AM with goal SoC = 0.8 (48 kWh for 60 kWh battery)
+- **Min/Max SoC Constraints**: Health and usability limits
+  - min_soc: Minimum allowed state (e.g., 0.1 to preserve battery health)
+  - max_soc: Maximum allowed state (e.g., 0.9 to avoid overcharging)
+- **Control**: Optimizer sets electrical power (kW) via `set_power()`:
+  - Positive power (e.g., +7 kW): Charge the vehicle (draw power from grid)
+  - Zero power: No charging (vehicle idle or charging paused)
+  - Negative power (if V2G supported, e.g., −3 kW): Discharge to grid (vehicle supplies power)
+  - The translation layer converts requested power into charger commands (start/stop, set current limit)
+
+Unlike thermal storage, the EV battery has no passive discharge (no self-discharge over the optimization horizon) and does not depend on ambient conditions. The key challenge is meeting the departure-time SoC goal while optimizing energy cost or self-consumption.
+
+**Baseline approach (Reactive):** When vehicle connects, re-optimize to charge by next known departure. The optimizer finds the cheapest or most self-consumptive charging window within that constrained time interval. This is the primary mode: **active control only occurs when the vehicle is connected and charging.**
+
+**With arrival/departure forecast (Limited benefit):** Using GPS data and historic patterns, predict today's arrival and next departure times. The main benefit is **preparatory multi-asset coordination**: knowing the EV will arrive at 5 PM, the optimizer can pre-stage other assets (home battery, DHW) to complete their charging before arrival, freeing up grid capacity for the EV.
+
+However, for typical single-vehicle scenarios with adequate grid capacity, this benefit is marginal—reactive optimization upon connection is usually sufficient and simpler. Predictive arrival becomes more valuable only in constrained scenarios:
+- **Tight grid import limits** (≤10 kW): Must coordinate asset charging windows to avoid simultaneous peaks
+- **Multiple vehicles**: Stagger charging across several EVs
+- **Complex competing demands**: DHW heating + building thermal charging + EV all competing for limited power
+
+For initial implementation, **start with reactive approach** (simpler, sufficient for most cases).
 
 ### Layer 2: Optimizer Core - `Optimizer`
 
