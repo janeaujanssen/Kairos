@@ -147,7 +147,7 @@ def plot_power_flow(
     
     # Create layout with dual y-axes if prices provided
     layout_update = {
-        "title": "Power Flow (Energy Balance: Grid + PV = Load + Storage)",
+        "title": "Power Flow",
         "xaxis_title": "Time (h)",
         "barmode": "relative",
         "height": 400,
@@ -248,15 +248,19 @@ def plot_cost_analysis(
     """Plot cost analysis: per-interval cost bars + cumulative cost line with profit/loss indication.
     
     Args:
-        hours: Time array
+        hours: Time array (hours)
         grid_import: Grid import power per interval (kW)
         grid_export: Grid export power per interval (kW)
         price_import: Import price per interval (€/kWh)
         price_export: Export price per interval (€/kWh)
     """
+    # Calculate time interval in hours from the hours array
+    dt_hours = hours[1] - hours[0] if len(hours) > 1 else 1.0
+    
     # Calculate cost per interval (€)
     # Positive = cost (importing), Negative = profit (exporting)
-    cost_per_interval = (grid_import * price_import) - (grid_export * price_export)
+    # Must multiply by dt_hours to convert from power (kW) × price (€/kWh) to energy cost (€)
+    cost_per_interval = (grid_import * price_import - grid_export * price_export) * dt_hours
     cumulative_cost = np.cumsum(cost_per_interval)
     
     # Create figure with secondary y-axis

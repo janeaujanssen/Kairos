@@ -11,8 +11,6 @@ enough to add them later without touching the optimizer's structure.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import numpy as np
 import streamlit as st
 
@@ -84,10 +82,19 @@ solver_tolerance = st.sidebar.number_input(
     value=1e-9, format="%.1e",
 )
 max_iterations = st.sidebar.number_input("Max iterations", min_value=10, max_value=100000, value=500, step=10)
+soft_penalty = st.sidebar.number_input(
+    "Constraint violation penalty (EUR/kWh)", min_value=0.0, max_value=10000.0, value=1000.0, step=100.0,
+    help="Cost per kWh of SoC constraint violation. Higher values discourage violations.",
+)
 
 st.sidebar.subheader("EVCC optimizer (optional)")
 evcc_enabled = st.sidebar.checkbox("Also run EVCC optimizer for comparison", value=False)
 evcc_url = st.sidebar.text_input("EVCC service URL", value=DEFAULT_EVCC_URL, disabled=not evcc_enabled)
+evcc_prc_p_exc_imp = st.sidebar.number_input(
+    "EVCC import limit penalty (EUR/W)", value=0.0, step=0.001, format="%.4f",
+    disabled=not evcc_enabled,
+    help="Price per W to penalize if grid import power exceeds the limit. Set to 0 for hard limit.",
+)
 
 # ----------------------------------------------------------------------------
 # Build time axis + forecasts (shared by Inputs tab display and the optimizer)
@@ -247,12 +254,14 @@ if run_clicked:
             grid, pv, battery, load, hours, dt_hours,
             mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
             solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
+            soft_penalty=soft_penalty,
         )
         st.session_state.result = opt.solve()
 
         if evcc_enabled:
             st.session_state.evcc_result = run_evcc_optimization(
                 grid, pv, battery, load, dt_hours, base_url=evcc_url,
+                prc_p_exc_imp=evcc_prc_p_exc_imp,
             )
         else:
             st.session_state.evcc_result = None
@@ -280,21 +289,28 @@ with tab_optimization:
             s2.metric("Status", result.status)
             s3.metric("Solve time", f"{result.solve_time * 1000:.0f} ms")
 
-            if result.violations:
-                st.markdown("**Constraint violations**")
-                st.dataframe(
-                    [
-                        {
-                            "Asset": v.asset, "Type": v.type,
-                            "Max violation": round(v.max_violation, 4),
-                            "Penalty cost": round(v.penalty_cost, 2),
-                        }
-                        for v in result.violations
-                    ],
-                    width='stretch', hide_index=True,
-                )
-            else:
-                st.success("No constraint violations.")
+            with st.container(height=150, border=False):
+                if result.violations:
+                    violation_names = ", ".join([v.asset for v in result.violations])
+                    total_penalty = sum([v.penalty_cost for v in result.violations])
+                    st.warning(
+                        f"Constraint violations reported: {violation_names}\n"
+                        f"• Total penalty cost: €{total_penalty:.2f}"
+                    )
+                    st.markdown("**Violation details**")
+                    st.dataframe(
+                        [
+                            {
+                                "Asset": v.asset, "Type": v.type,
+                                "Max violation": round(v.max_violation, 4),
+                                "Penalty cost": round(v.penalty_cost, 2),
+                            }
+                            for v in result.violations
+                        ],
+                        width='stretch', hide_index=True,
+                    )
+                else:
+                    st.success("No constraint violations.")
 
             st.markdown("**Cost metrics**")
             m1, m2, m3 = st.columns(3)
@@ -342,16 +358,35 @@ with tab_optimization:
                     e1.metric("Type", "MILP (external service)")
                     e2.metric("Status", evcc_result.status)
 
-                    if evcc_result.limit_violations:
-                        active = {k: v for k, v in evcc_result.limit_violations.items() if v}
-                        if active:
-                            st.warning(f"Limit violations reported: {', '.join(active.keys())}")
-                        else:
-                            st.success("No limit violations reported.")
+                    with st.container(height=150, border=False):
+                        if evcc_result.limit_violations:
+                            active = {k: v for k, v in evcc_result.limit_violations.items() if v}
+                            if active:
+                                violation_str = ", ".join(active.keys())
+                                total_import_overshoot = np.sum(evcc_result.grid_import_overshoot_kwh)
+                                total_export_overshoot = np.sum(evcc_result.grid_export_overshoot_kwh)
+                                st.warning(
+                                    f"Limit violations reported: {violation_str}\n"
+                                    f"• Import overshoot: {total_import_overshoot:.2f} kWh\n"
+                                    f"• Export overshoot: {total_export_overshoot:.2f} kWh"
+                                )
+                            else:
+                                st.success("No limit violations reported.")
 
                     if evcc_result.objective_value is not None:
                         st.markdown("**Cost metrics**")
-                        st.metric("Objective value", f"{evcc_result.objective_value:.4f}")
+                        # Calculate energy cost from grid power and price forecasts
+                        num_steps = len(evcc_result.grid_import)
+                        energy_cost_evcc = float(
+                            np.sum(
+                                evcc_result.grid_import * result.price_import[:num_steps]
+                                - evcc_result.grid_export * result.price_export[:num_steps]
+                            )
+                            * dt_hours
+                        )
+                        m1, m2 = st.columns(2)
+                        m1.metric("Calculated energy cost", f"€{energy_cost_evcc:.2f}")
+                        m2.metric("Objective value", f"€{evcc_result.objective_value:.2f}")
 
                     if len(evcc_result.battery_power):
                         st.markdown("**Current control commands (t=0)**")
@@ -372,6 +407,15 @@ with tab_optimization:
                             ),
                             width='stretch', key="chart_power_flow_evcc",
                         )
+                        st.plotly_chart(
+                            viz.plot_cost_analysis(
+                                result.hours[: len(evcc_result.battery_power)],
+                                evcc_result.grid_import, evcc_result.grid_export,
+                                result.price_import[: len(evcc_result.battery_power)],
+                                result.price_export[: len(evcc_result.battery_power)],
+                            ),
+                            width='stretch', key="chart_cost_evcc",
+                        )
                         if len(evcc_result.battery_soc):
                             st.plotly_chart(
                                 viz.plot_soc_trajectory(
@@ -383,6 +427,18 @@ with tab_optimization:
                             )
                     else:
                         st.info("EVCC service returned no battery schedule to display.")
+
+                    with st.expander("Request payload (input)", expanded=False):
+                        if evcc_result.payload:
+                            st.json(evcc_result.payload)
+                        else:
+                            st.info("No payload available")
+
+                    with st.expander("Response data (output)", expanded=False):
+                        if evcc_result.raw_response:
+                            st.json(evcc_result.raw_response)
+                        else:
+                            st.info("No response data available")
 
             st.divider()
             st.plotly_chart(

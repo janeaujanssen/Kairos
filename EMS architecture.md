@@ -215,6 +215,7 @@ Plotting functions generate interactive charts using Plotly, both to visualize i
   - **Time Interval** (minutes): Timestep resolution for optimization (e.g., 60 min = 1-hour intervals)
   - **Solver Tolerance**: Numerical precision for convergence (default: 1e-9)
   - **Max Iterations**: Upper limit on solver iterations (default: 500)
+  - **Soft constraint penalty values**: Values used to manage the impact of constraint violations.
 
 **Two tabs**:
 
@@ -270,111 +271,89 @@ The EVCC optimizer operates as a **standalone decision module** called alongside
 
 Both optimizers receive the **same forecasts** and operate independently. Results can be compared or combined by the user.
 
-### API Request Structure
-
-The EMS app sends a JSON payload to the EVCC optimizer, example payload from API docs:
+The EMS app sends a JSON payload with the following structure (all fields in **SI base units: W, Wh, seconds**):
 
 ```json
 {
   "strategy": {
-    "charging_strategy": "none",
-    "discharging_strategy": "none"
+    "charging_strategy": "charge_before_export",
+    "discharging_strategy": "discharge_before_import"
   },
   "grid": {
-    "p_max_imp": 0,
-    "p_max_exp": 0,
-    "prc_p_exc_imp": 0
+    "p_max_imp": 10000,          // W (10 kW)
+    "p_max_exp": 8000,           // W (8 kW)
+    "prc_p_exc_imp": 0           // EUR/W (penalty for exceeding import limit)
   },
   "batteries": [
     {
       "charge_from_grid": true,
       "discharge_to_grid": true,
-      "s_capacity": 0,
-      "s_min": 0,
-      "s_max": 0,
-      "s_initial": 0,
-      "p_demand": [
-        0
-      ],
-      "s_goal": [
-        0
-      ],
-      "c_min": 0,
-      "c_max": 0,
-      "d_max": 0,
-      "p_a": 0,
-      "c_priority": 0
+      "s_capacity": 10000,        // Wh (10 kWh)
+      "s_min": 1000,              // Wh (min SoC)
+      "s_max": 9500,              // Wh (max SoC)
+      "s_initial": 5000,          // Wh (starting state, 50%)
+      "p_demand": [0, 0, ...],    // Wh/timestep (min charge demand)
+      "s_goal": [0, 0, ...],      // Wh/timestep (goal SoC per timestep)
+      "c_min": 0,                 // W
+      "c_max": 5000,              // W (5 kW)
+      "d_max": 5000,              // W (5 kW)
+      "p_a": 0,                   // EUR/Wh (residual battery value)
+      "c_priority": 1
     }
   ],
   "time_series": {
-    "dt": [
-      0
-    ],
-    "gt": [
-      0
-    ],
-    "ft": [
-      0
-    ],
-    "p_N": [
-      0
-    ],
-    "p_E": [
-      0
-    ]
+    "dt": [3600, 3600, ...],      // seconds (1-hour intervals)
+    "gt": [500, 400, ...],        // Wh/timestep (home load: 0.5 kW × 1h = 0.5 kWh)
+    "ft": [5000, 4500, ...],      // Wh/timestep (PV yield: 5 kW × 1h = 5 kWh)
+    "p_N": [0.20, 0.20, ...],     // EUR/kWh (grid import price)
+    "p_E": [0.14, 0.14, ...]      // EUR/kWh (grid export price, 70% of import)
   },
-  "eta_c": 0.95,
-  "eta_d": 0.95
+  "eta_c": 0.95,                  // charging efficiency (95%)
+  "eta_d": 0.95                   // discharging efficiency (95%)
 }
 ```
 
-### API Response Structure
+**Key point on input units**: EVCC expects energy per timestep (Wh), not instantaneous power. For example, a 5 kW load over 1 hour becomes 5,000 Wh.
 
-The EVCC service returns an optimized charging schedule, example response from APi docs:
+## Output JSON Structure
+
+The EVCC service returns an optimized schedule with the same unit convention (W, Wh, seconds):
 
 ```json
 {
-  "status": "string",
-  "objective_value": 0,
+  "status": "optimal",
+  "objective_value": 12.50,       // EUR (total cost)
   "limit_violations": {
-    "grid_import_limit_exceeded": true,
-    "grid_export_limit_hit": true
+    "grid_import_limit_exceeded": false,
+    "grid_export_limit_hit": false
   },
   "batteries": [
     {
-      "charging_power": [
-        0
-      ],
-      "discharging_power": [
-        0
-      ],
-      "state_of_charge": [
-        0
-      ]
+      "charging_power": [5000, 4000, ...],      // Wh/timestep
+      "discharging_power": [0, 1000, ...],      // Wh/timestep
+      "state_of_charge": [5000, 8000, ...]      // Wh (energy at end of each timestep)
     }
   ],
-  "grid_import": [
-    0
-  ],
-  "grid_export": [
-    0
-  ],
-  "flow_direction": [
-    0
-  ],
-  "grid_import_overshoot": [
-    0
-  ],
-  "grid_export_overshoot": [
-    0
-  ]
+  "grid_import": [2000, 1500, ...],             // Wh/timestep
+  "grid_export": [0, 500, ...],                 // Wh/timestep
+  "flow_direction": [0, 1, ...],                // binary (0=import, 1=export)
+  "grid_import_overshoot": [0, 0, ...],         // Wh/timestep (above limit)
+  "grid_export_overshoot": [0, 0, ...]          // Wh/timestep (below limit due to export cap)
 }
 ```
+**Key point on output units**: All energy flows are per timestep (Wh), not power. To align with the local optimizer's power-based interface (kW), the results must be converted by dividing by timestep duration.
+## Results Display
 
-### Results Display
-On the optimization tab, the EVCC optimizer shows the same results (for as much as is possible) to the local optimizer but in a second column such that results can be easily compared.
+On the optimization tab, the EVCC optimizer results appear in a second column parallel to the local optimizer, it follows identical structure and contents (as much as is possible).
 
-In essence the only relevant output regarding scheduling from the EVCC optimizer is the battery charge and discharge power schedule, which in turn drives the resulting grid import/export. The remainder of the postprocessing should be the same as for the local optimizer, only the battery power schedule should be used (with the exception of the optimizer solver diagnostics).
+All charts and metrics use the converted units (kW, kWh, %) matching the local optimizer for direct visual comparison.
+
+### Configuration Options in Sidebar
+
+- **EVCC service URL**: Endpoint for the external optimizer (default: `http://localhost:7050/optimize/charge-schedule`)
+- **EVCC import limit penalty (EUR/W)**: Penalty cost for exceeding grid import limit. Set to 0 for hard constraint (violations reported), or > 0 for soft constraint allowing violations at a cost (default: 0).
+
+
 
 
 
