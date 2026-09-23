@@ -11,10 +11,10 @@
 
 | Component | State | Constraints | Forecast | Control |
 |-----------|-------|-------------|----------|---------|
-| **Home Battery** | SoC | • Energy capacity<br>• Min/Max SoC<br>• Max charge/discharge power | — | Battery Charge/Discharge Power |
+| **Home Battery** | SoC | • Energy capacity<br>• Min/Max SoC<br>• Max charge/discharge power<br>• Charge/discharge efficiency | — | Battery Charge/Discharge Power |
 | **DHW Tank** | Thermal SoC<br>(based on water temp) | • Thermal capacity<br>• Min/Max temperature<br>• Max charge/discharge power<br>• Passive discharge power | Hot water demand forecast | Thermal Power<br>(via heat pump setpoint) |
 | **Building Thermal Mass** | Thermal SoC<br>(based on indoor temp) | • Thermal capacity<br>• Min/Max comfort temperature<br>• Max charge/discharge power<br>• No passive discharge* | • Outdoor temp<br>• Solar gains | Thermal Power<br>(via heat pump offset) |
-| **EV Battery** | EV SoC | • Energy capacity<br>• Desired SoC at departure<br>• Max charge/discharge power | Arrival/departure time | Battery Charge/Discharge Power |
+| **EV Battery** | EV SoC | • Energy capacity<br>• Desired SoC at departure<br>• Max charge/discharge power<br>• Charge/discharge efficiency | Arrival/departure time | Battery Charge/Discharge Power |
 
 *Building thermal mass has zero passive discharge because baseline weather-compensation heating curve already offsets outdoor heat loss. Stored energy above baseline naturally decays as building cools—this is intentional discharge, not loss.
 
@@ -32,7 +32,8 @@
 
 ### Neglected
 
-- **Efficiencies / losses**: battery round-trip efficiency & self-discharge, EV charger AC/DC efficiency, DHW tank and building heat-loss coefficients.
+- **EV charger efficiency**: AC/DC conversion losses at the wall charger.
+- **Thermal storage losses**: DHW tank and building thermal mass heat-loss coefficients (currently estimated as passive_discharge_power by conversion layer).
 
 ### Not a Concern
 

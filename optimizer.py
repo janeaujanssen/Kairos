@@ -142,39 +142,54 @@ class Optimizer:
         p_import = [pulp.LpVariable(f"p_import_{t}", lowBound=0, upBound=max_imp) for t in range(n)]
         p_export = [pulp.LpVariable(f"p_export_{t}", lowBound=0, upBound=max_exp) for t in range(n)]
         
-        # Multi-storage: power and SoC variables for each storage
-        storage_power_dict = {}  # {storage_name: [power_vars]}
+        # Multi-storage: charging/discharging power, SoC, and efficiency for each storage
+        # Power is split into charging (p_c >= 0) and discharging (p_d >= 0) components
+        # Net power into storage = p_c - p_d
+        # Energy stored changes by: p_c * eta_c - p_d (with efficiency losses)
+        storage_power_charge_dict = {}  # {storage_name: [p_c_vars]}
+        storage_power_discharge_dict = {}  # {storage_name: [p_d_vars]}
         storage_soc_dict = {}    # {storage_name: [soc_vars]}
         storage_slack_low_dict = {}  # {storage_name: [slack_vars]}
         storage_slack_high_dict = {}  # {storage_name: [slack_vars]}
         storage_passive_discharge_dict = {}  # {storage_name: passive_loss_kW}
+        storage_charge_efficiency_dict = {}  # {storage_name: eta_c}
+        storage_discharge_efficiency_dict = {}  # {storage_name: eta_d}
         
         for storage in self.storages:
             name = storage.name
-            storage_power_dict[name] = [
-                pulp.LpVariable(
-                    f"{name}_power_{t}",
-                    lowBound=-storage.max_discharge_power,
-                    upBound=storage.max_charge_power,
-                )
+            constraints = storage.get_constraints()
+            
+            # Create separate charging and discharging power variables (both >= 0)
+            storage_power_charge_dict[name] = [
+                pulp.LpVariable(f"{name}_p_charge_{t}", lowBound=0, upBound=storage.max_charge_power)
                 for t in range(n)
             ]
+            storage_power_discharge_dict[name] = [
+                pulp.LpVariable(f"{name}_p_discharge_{t}", lowBound=0, upBound=storage.max_discharge_power)
+                for t in range(n)
+            ]
+            
             storage_soc_dict[name] = [pulp.LpVariable(f"{name}_soc_{t}", lowBound=0, upBound=1) for t in range(n + 1)]
             storage_slack_low_dict[name] = [pulp.LpVariable(f"{name}_soc_low_slack_{t}", lowBound=0) for t in range(n + 1)]
             storage_slack_high_dict[name] = [pulp.LpVariable(f"{name}_soc_high_slack_{t}", lowBound=0) for t in range(n + 1)]
             
-            constraints = storage.get_constraints()
             storage_passive_discharge_dict[name] = constraints.get("passive_discharge_power", 0.0)
+            storage_charge_efficiency_dict[name] = constraints.get("charge_efficiency", 0.95)
+            storage_discharge_efficiency_dict[name] = constraints.get("discharge_efficiency", 0.95)
             
             # Initial SoC = measured current state
             prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
             
-            # SoC dynamics for this storage
+            # SoC dynamics with charge/discharge efficiency
+            # Energy stored = (charging_power * charge_efficiency - discharging_power)
             passive_loss = storage_passive_discharge_dict[name]
+            eta_c = storage_charge_efficiency_dict[name]
+            
             for t in range(n):
+                # SoC_t+1 = SoC_t + (p_c * eta_c - p_d - passive_loss) * dt / capacity
                 prob += (
                     storage_soc_dict[name][t + 1] == storage_soc_dict[name][t] + 
-                    (storage_power_dict[name][t] - passive_loss) * dt / storage.capacity,
+                    (storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss) * dt / storage.capacity,
                     f"{name}_soc_dynamics_{t}",
                 )
             
@@ -183,11 +198,16 @@ class Optimizer:
                 prob += storage_soc_dict[name][t] >= storage.min_soc - storage_slack_low_dict[name][t], f"{name}_soc_min_{t}"
                 prob += storage_soc_dict[name][t] <= storage.max_soc + storage_slack_high_dict[name][t], f"{name}_soc_max_{t}"
 
-        # Energy balance: Grid + PV = Load + sum(all storages), at every t
+        # Energy balance: Grid + PV = Load + sum(storages as seen by system with discharge efficiency)
+        # For each storage: system provides p_c (charging) and receives p_d * eta_d (discharging)
+        # So total system power from storages = sum(p_c - p_d * eta_d)
         for t in range(n):
-            total_storage_power = pulp.lpSum(storage_power_dict[s.name][t] for s in self.storages)
+            total_storage_system_power = pulp.lpSum(
+                storage_power_charge_dict[s.name][t] - storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name]
+                for s in self.storages
+            )
             prob += (
-                (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + total_storage_power,
+                (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + total_storage_system_power,
                 f"energy_balance_{t}",
             )
 
@@ -241,11 +261,14 @@ class Optimizer:
         result.grid_import = np.array([val(v) for v in p_import])
         result.grid_export = np.array([val(v) for v in p_export])
         
-        # Multi-storage results
+        # Multi-storage results: convert charge/discharge power to net power
         for storage in self.storages:
             name = storage.name
+            p_c = np.array([val(v) for v in storage_power_charge_dict[name]])
+            p_d = np.array([val(v) for v in storage_power_discharge_dict[name]])
+            net_power = p_c - p_d  # positive = charging, negative = discharging
             result.storages[name] = {
-                "power": np.array([val(v) for v in storage_power_dict[name]]),
+                "power": net_power,
                 "soc": np.array([val(v) for v in storage_soc_dict[name]]),
                 "passive_discharge": np.full(n, storage_passive_discharge_dict[name], dtype=float),
             }

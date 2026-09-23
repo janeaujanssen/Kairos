@@ -119,6 +119,8 @@ class Storage(Asset):
         max_charge_power: float,
         max_discharge_power: float,
         passive_discharge_power: Optional[float] = None,
+        charge_efficiency: float = 0.95,
+        discharge_efficiency: float = 0.95,
     ):
         super().__init__(name)
         self.current_soc = current_soc                # fraction 0-1, measured at t=0
@@ -128,6 +130,8 @@ class Storage(Asset):
         self.max_charge_power = max_charge_power        # kW
         self.max_discharge_power = max_discharge_power  # kW
         self.passive_discharge_power = passive_discharge_power  # kWh per timestep (for thermal storage)
+        self.charge_efficiency = charge_efficiency      # efficiency when storing energy (0-1, e.g., 0.95 = 95% stored, 5% lost as heat)
+        self.discharge_efficiency = discharge_efficiency  # efficiency when releasing energy (0-1, e.g., 0.95 = 95% available, 5% lost as heat)
         self._power_schedule: Optional[np.ndarray] = None  # set by optimizer after solve
 
     def get_state(self) -> dict:
@@ -140,6 +144,8 @@ class Storage(Asset):
             "max_soc": self.max_soc,
             "max_charge_power": self.max_charge_power,
             "max_discharge_power": self.max_discharge_power,
+            "charge_efficiency": self.charge_efficiency,
+            "discharge_efficiency": self.discharge_efficiency,
         }
         if self.passive_discharge_power is not None:
             c["passive_discharge_power"] = self.passive_discharge_power
