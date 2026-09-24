@@ -117,7 +117,7 @@ with tab_inputs:
     st.header("Sources")
 
     # --- Grid ---
-    with st.expander("🔌 Grid", expanded=True):
+    with st.expander("🔌 Grid", expanded=False):
         st.markdown("**Current state** *(measured, t=0)*")
         c1, c2 = st.columns(2)
         grid_current_power = c1.number_input(
@@ -153,7 +153,7 @@ with tab_inputs:
         st.caption("None — Sources are not directly controlled; grid power results from the energy balance.")
 
     # --- PV ---
-    with st.expander("☀️ PV", expanded=True):
+    with st.expander("☀️ PV", expanded=False):
         st.markdown("**Current state** *(measured, t=0)*")
         pv_current_power = st.number_input("Current PV power (kW)", value=0.0, min_value=0.0, step=0.1, key="pv_current_power")
 
@@ -175,44 +175,55 @@ with tab_inputs:
     st.header("Storage")
 
     # --- Home Battery 1 ---
-    with st.expander("🔋 Battery 1", expanded=True):
-        st.markdown("**Current state** *(measured, t=0)*")
-        battery1_current_soc = st.slider("Current SoC (%)", 0, 100, 50, key="battery1_current_soc") / 100.0
+    if battery_1_enabled:
+        with st.expander("🔋 Battery 1", expanded=False):
+            st.markdown("**Current state** *(measured, t=0)*")
+            battery1_current_soc = st.slider("Current SoC (%)", 0, 100, 50, key="battery1_current_soc") / 100.0
 
-        st.markdown("**Constraints**")
-        c1, c2 = st.columns(2)
-        battery1_capacity = c1.number_input("Energy capacity (kWh)", value=10.0, min_value=0.1, key="battery1_capacity")
-        battery1_min_soc, battery1_max_soc = c2.slider(
-            "Min / max SoC (%)", 0, 100, (10, 95), key="battery1_soc_range",
-        )
-        battery1_min_soc, battery1_max_soc = battery1_min_soc / 100.0, battery1_max_soc / 100.0
-        c1, c2 = st.columns(2)
-        battery1_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery1_max_charge")
-        battery1_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery1_max_discharge")
-        battery1_passive_discharge = st.number_input(
-            "Passive discharge power (kW)", value=0.0, min_value=0.0, step=0.001,
-            key="battery1_passive_discharge",
-            help="Power lost due to self-discharge or standby losses (kW). For electrical batteries, typically 0."
-        )
-        c1, c2 = st.columns(2)
-        battery1_charge_efficiency = c1.slider(
-            "Charge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery1_charge_efficiency",
-            help="Fraction of input power stored (0-1). 0.95 = 95% stored, 5% lost as heat."
-        )
-        battery1_discharge_efficiency = c2.slider(
-            "Discharge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery1_discharge_efficiency",
-            help="Fraction of stored energy available when discharging (0-1). 0.95 = 95% available, 5% lost."
-        )
+            st.markdown("**Constraints**")
+            c1, c2 = st.columns(2)
+            battery1_capacity = c1.number_input("Energy capacity (kWh)", value=10.0, min_value=0.1, key="battery1_capacity")
+            battery1_min_soc, battery1_max_soc = c2.slider(
+                "Min / max SoC (%)", 0, 100, (10, 95), key="battery1_soc_range",
+            )
+            battery1_min_soc, battery1_max_soc = battery1_min_soc / 100.0, battery1_max_soc / 100.0
+            c1, c2 = st.columns(2)
+            battery1_max_charge = c1.number_input("Max charge power (kW)", value=5.0, min_value=0.0, key="battery1_max_charge")
+            battery1_max_discharge = c2.number_input("Max discharge power (kW)", value=5.0, min_value=0.0, key="battery1_max_discharge")
+            battery1_passive_discharge = st.number_input(
+                "Passive discharge power (kW)", value=0.0, min_value=0.0, step=0.001,
+                key="battery1_passive_discharge",
+                help="Power lost due to self-discharge or standby losses (kW). For electrical batteries, typically 0."
+            )
+            c1, c2 = st.columns(2)
+            battery1_charge_efficiency = c1.slider(
+                "Charge efficiency", 0.0, 5.0, 0.95, step=0.01, key="battery1_charge_efficiency",
+                help="Fraction of input power stored (0-5). 0.95 = 95% stored, 5% lost as heat. >1.0 for heat pumps (COP)."
+            )
+            battery1_discharge_efficiency = c2.slider(
+                "Discharge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery1_discharge_efficiency",
+                help="Fraction of stored energy available when discharging (0-1). 0.95 = 95% available, 5% lost."
+            )
 
-        st.markdown("**Forecast**")
-        st.caption("— None; battery behavior is determined entirely by the optimizer.")
+            st.markdown("**Forecast**")
+            st.caption("— None; battery behavior is determined entirely by the optimizer.")
 
-        st.markdown("**Control**")
-        st.caption("Battery Charge/Discharge Power (kW) — set by the optimizer.")
+            st.markdown("**Control**")
+            st.caption("Battery Charge/Discharge Power (kW) — set by the optimizer.")
+    else:
+        battery1_current_soc = 0.0
+        battery1_capacity = 0.0
+        battery1_min_soc = 0.0
+        battery1_max_soc = 1.0
+        battery1_max_charge = 0.0
+        battery1_max_discharge = 0.0
+        battery1_passive_discharge = 0.0
+        battery1_charge_efficiency = 0.95
+        battery1_discharge_efficiency = 0.95
 
     # --- Home Battery 2 ---
     if battery_2_enabled:
-        with st.expander("🔋 Battery 2", expanded=True):
+        with st.expander("🔋 Battery 2", expanded=False):
             st.markdown("**Current state** *(measured, t=0)*")
             battery2_current_soc = st.slider("Current SoC (%)", 0, 100, 30, key="battery2_current_soc") / 100.0
 
@@ -233,8 +244,8 @@ with tab_inputs:
             )
             c1, c2 = st.columns(2)
             battery2_charge_efficiency = c1.slider(
-                "Charge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery2_charge_efficiency",
-                help="Fraction of input power stored (0-1). 0.95 = 95% stored, 5% lost as heat."
+                "Charge efficiency", 0.0, 5.0, 0.95, step=0.01, key="battery2_charge_efficiency",
+                help="Fraction of input power stored (0-5). 0.95 = 95% stored, 5% lost as heat. >1.0 for heat pumps (COP)."
             )
             battery2_discharge_efficiency = c2.slider(
                 "Discharge efficiency", 0.0, 1.0, 0.95, step=0.01, key="battery2_discharge_efficiency",
@@ -259,7 +270,7 @@ with tab_inputs:
 
     # --- DHW Tank ---
     if dhw_tank_enabled:
-        with st.expander("🚰 DHW Tank", expanded=True):
+        with st.expander("🚰 DHW Tank", expanded=False):
             # Physical parameters section with light blue background
             st.markdown("**Physical Parameters** *(editable)*")
             with st.container():
@@ -303,6 +314,11 @@ with tab_inputs:
                     "Heat pump power (kW)", value=3.0, min_value=0.0, step=0.1, key="dhw_max_charge_power",
                     help="Maximum heating power from heat pump (kW)"
                 )
+                
+                dhw_cop = st.number_input(
+                    "Heat pump COP", value=3.0, min_value=0.5, max_value=5.0, step=0.1, key="dhw_cop",
+                    help="Coefficient of Performance: heat output / electrical input. Typical 2.5-4.0 for air-to-water heat pumps."
+                )
             
             # Calculate equivalent battery parameters
             try:
@@ -314,6 +330,7 @@ with tab_inputs:
                     heat_loss_coeff_kw_per_k=dhw_heat_loss_coeff,
                     min_comfort_temp_celsius=dhw_min_comfort_temp,
                     max_charge_power_kw=dhw_max_charge_power,
+                    heat_pump_cop=dhw_cop,
                 )
                 dhw_battery_params = convert_dhw_params(dhw_physical)
             except ValueError as e:
@@ -369,25 +386,25 @@ with tab_inputs:
                 
                 c1, c2 = st.columns(2)
                 dhw_charge_efficiency = c1.slider(
-                    "Charge efficiency", 0.0, 1.0, 1.0, step=0.01,
+                    "Charge efficiency", 0.0, 5.0, dhw_cop, step=0.01,
                     disabled=True,
-                    help="Thermal storage has no charge/discharge losses (1.0)"
+                    help="Derived from Heat pump COP. Shows the charge efficiency used by the optimizer."
                 )
                 dhw_discharge_efficiency = c2.slider(
                     "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
                     disabled=True,
-                    help="Thermal storage has no charge/discharge losses (1.0)"
+                    help="Thermal storage has no discharge losses (1.0)"
                 )
 
                 st.markdown("**Forecast** — hot water demand")
                 c1, c2 = st.columns(2)
                 dhw_morning_peak_energy = c1.number_input(
-                    "Morning shower energy (kWh)", value=0.8, min_value=0.0, step=0.1,
+                    "Morning shower energy (kWh)", value=1.0, min_value=0.0, step=0.1,
                     key="dhw_morning_peak_energy",
                     help="Typical energy needed for morning showers"
                 )
                 dhw_evening_peak_energy = c2.number_input(
-                    "Evening usage energy (kWh)", value=0.5, min_value=0.0, step=0.1,
+                    "Evening usage energy (kWh)", value=0.8, min_value=0.0, step=0.1,
                     key="dhw_evening_peak_energy",
                     help="Typical energy needed for evening hot water use"
                 )
@@ -418,7 +435,7 @@ with tab_inputs:
     st.header("Loads")
 
     # --- Home Consumption ---
-    with st.expander("🏠 Home Consumption", expanded=True):
+    with st.expander("🏠 Home Consumption", expanded=False):
         st.markdown("**Current state** *(measured, t=0)*")
         load_current_power = st.number_input("Current load power (kW)", value=0.5, min_value=0.0, step=0.1, key="load_current_power")
 
@@ -488,7 +505,7 @@ if dhw_tank_enabled and dhw_battery_params:
         min_soc=dhw_battery_params.min_soc, max_soc=dhw_battery_params.max_soc,
         max_charge_power=dhw_battery_params.max_charge_power_kw, max_discharge_power=dhw_battery_params.max_discharge_power_kw,
         passive_discharge_power=dhw_battery_params.passive_discharge_power_kw,
-        charge_efficiency=1.0, discharge_efficiency=1.0,  # No charge/discharge efficiency losses for thermal storage
+        charge_efficiency=dhw_battery_params.charge_efficiency, discharge_efficiency=dhw_battery_params.discharge_efficiency,
         demand_forecast=dhw_demand_forecast_full,
     ))
 

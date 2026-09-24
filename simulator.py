@@ -7,6 +7,7 @@ APIs, ...) without touching the rest of the app.
 
 from __future__ import annotations
 
+import math
 import numpy as np
 
 
@@ -101,23 +102,32 @@ def simulate_dhw_demand(
     peak_width: float = 0.5,
 ) -> np.ndarray:
     """
-    DHW (hot water) demand forecast in kWh per timestep.
+    DHW (hot water) demand forecast in kW (power).
     Models typical shower/usage peaks in the morning and evening.
     
     Args:
         hours: Time axis in hours
         morning_peak_hour: Hour of day for morning shower (e.g., 7.0 = 7 AM)
         evening_peak_hour: Hour of day for evening usage (e.g., 21.0 = 9 PM)
-        morning_peak_energy: Energy peak height for morning shower (kWh)
-        evening_peak_energy: Energy peak height for evening usage (kWh)
-        peak_width: Width of each peak in hours (Gaussian sigma)
+        morning_peak_energy: Total energy consumed in morning peak (kWh) - used to compute peak power
+        evening_peak_energy: Total energy consumed in evening peak (kWh) - used to compute peak power
+        peak_width: Width (sigma) of each peak in hours for Gaussian distribution
         
     Returns:
-        DHW demand in kWh per timestep (energy, not power)
+        DHW demand in kW (power per timestep, converted to energy by optimizer via dt)
     """
     hod = hours % 24  # hours of the day
-    morning = morning_peak_energy * np.exp(-0.5 * ((hod - morning_peak_hour) / peak_width) ** 2)
-    evening = evening_peak_energy * np.exp(-0.5 * ((hod - evening_peak_hour) / peak_width) ** 2)
+    
+    # Convert total energy to peak power for Gaussian distribution
+    # For a Gaussian: integral = peak_height * sqrt(2π) * sigma
+    # So: peak_height = total_energy / (sqrt(2π) * sigma)
+    normalization = math.sqrt(2 * math.pi) * peak_width
+    morning_peak_height = morning_peak_energy / normalization
+    evening_peak_height = evening_peak_energy / normalization
+    
+    # Return power (kW) - optimizer converts to energy via dt
+    morning = morning_peak_height * np.exp(-0.5 * ((hod - morning_peak_hour) / peak_width) ** 2)
+    evening = evening_peak_height * np.exp(-0.5 * ((hod - evening_peak_hour) / peak_width) ** 2)
     
     return morning + evening
 

@@ -27,6 +27,7 @@ class DHWPhysicalParams:
     heat_loss_coeff_kw_per_k: float   # Heat loss coefficient in kW/K
     min_comfort_temp_celsius: float   # Minimum comfort temperature for showers (e.g., 40°C)
     max_charge_power_kw: float        # Maximum heat pump power (kW)
+    heat_pump_cop: float = 1.0        # Coefficient of Performance (heat output / electrical input)
 
 
 @dataclass
@@ -39,6 +40,8 @@ class DHWEquivalentBatteryParams:
     max_charge_power_kw: float        # Max charging power (kW)
     max_discharge_power_kw: float     # Max discharging power (kW) = 0 for DHW
     passive_discharge_power_kw: float # Heat loss power at current temperature (kW)
+    charge_efficiency: float          # Heat pump COP (converted to battery efficiency)
+    discharge_efficiency: float       # Always 1.0 (no active discharge)
 
 
 def convert_dhw_params(physical: DHWPhysicalParams) -> DHWEquivalentBatteryParams:
@@ -121,4 +124,6 @@ def convert_dhw_params(physical: DHWPhysicalParams) -> DHWEquivalentBatteryParam
         max_charge_power_kw=max_charge_power,
         max_discharge_power_kw=max_discharge_power,
         passive_discharge_power_kw=passive_discharge_power,
+        charge_efficiency=physical.heat_pump_cop,
+        discharge_efficiency=1.0,
     )

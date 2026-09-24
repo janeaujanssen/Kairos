@@ -184,13 +184,13 @@ class Optimizer:
             # Energy stored = (charging_power * charge_efficiency - discharging_power - passive_loss - demand)
             passive_loss = storage_passive_discharge_dict[name]
             eta_c = storage_charge_efficiency_dict[name]
-            demand_energy = storage.demand_forecast if storage.demand_forecast is not None else np.zeros(n)
+            demand_power = storage.demand_forecast if storage.demand_forecast is not None else np.zeros(n)
             
             for t in range(n):
-                # SoC_t+1 = SoC_t + [(p_c * eta_c - p_d - passive_loss) * dt - demand_energy] / capacity
+                # SoC_t+1 = SoC_t + [(p_c * eta_c - p_d - passive_loss) * dt - demand_power * dt] / capacity
                 prob += (
                     storage_soc_dict[name][t + 1] == storage_soc_dict[name][t] + 
-                    ((storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss) * dt - demand_energy[t]) / storage.capacity,
+                    ((storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss - demand_power[t]) * dt) / storage.capacity,
                     f"{name}_soc_dynamics_{t}",
                 )
             
