@@ -26,6 +26,7 @@ from simulator import (
 from optimizer import Optimizer, OptimizationResult
 from evcc_client import run_evcc_optimization, EVCCResult, DEFAULT_EVCC_URL
 from dhw_conversion import DHWPhysicalParams, convert_dhw_params
+from ev_conversion import EVTripPlan, calculate_trip_energy_required, trip_to_discharge_demand_forecast, simulate_ev_charging_window
 import visualization as viz
 
 st.set_page_config(page_title="Home EMS Optimizer", page_icon="🏠", layout="wide")
@@ -71,6 +72,7 @@ st.sidebar.subheader("Assets")
 battery_1_enabled = st.sidebar.checkbox("🔋 Battery 1", value=True)
 battery_2_enabled = st.sidebar.checkbox("🔋 Battery 2", value=False)
 dhw_tank_enabled = st.sidebar.checkbox("💧 DHW Tank", value=False)
+ev_enabled = st.sidebar.checkbox("🚗 EV Battery", value=False)
 
 st.sidebar.subheader("Configuration")
 mode_label = st.sidebar.selectbox(
@@ -432,6 +434,151 @@ with tab_inputs:
     else:
         dhw_battery_params = None
 
+    # --- EV Battery ---
+    if ev_enabled:
+        with st.expander("🚗 EV Battery", expanded=False):
+            # Physical parameters section with light blue background
+            st.markdown("**Physical Parameters** *(editable)*")
+            with st.container():
+                st.markdown(
+                    '<div style="background-color: #E3F2FD; padding: 12px; border-radius: 5px; margin-bottom: 15px;">'
+                    '<small><i>Physical EV and trip properties below. Derived battery parameters computed automatically.</i></small>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                
+                c1, c2 = st.columns(2)
+                ev_capacity = c1.number_input(
+                    "Battery capacity (kWh)", value=50.0, min_value=1.0, step=1.0, key="ev_capacity",
+                    help="Total usable battery capacity"
+                )
+                ev_current_soc = c2.slider(
+                    "Current SoC (%)", 0, 100, 30, key="ev_current_soc",
+                    help="Current state of charge"
+                ) / 100.0
+                
+                st.markdown("**Charging Window** *(when plugged in at home)*")
+                c1, c2 = st.columns(2)
+                ev_arrival_hour = c1.slider(
+                    "Arrival time (hour of day)", 0.0, 23.5, 17.0, step=0.5, key="ev_arrival_hour",
+                    help="When EV arrives home and can be charged"
+                )
+                ev_departure_hour = c2.slider(
+                    "Departure time (hour of day)", 0.0, 23.5, 09.0, step=0.5, key="ev_departure_hour",
+                    help="When EV leaves (must have required energy by then)"
+                )
+                
+                st.markdown("**Trip Plan**")
+                c1, c2, c3 = st.columns(3)
+                ev_distance_km = c1.number_input(
+                    "Round trip distance (km)", value=30.0, min_value=1.0, step=1.0, key="ev_distance_km",
+                    help="Total distance to be driven (km)"
+                )
+                ev_efficiency = c2.number_input(
+                    "Efficiency (km/kWh)", value=5.0, min_value=1.0, step=0.5, key="ev_efficiency",
+                    help="Vehicle efficiency in km per kWh"
+                )
+                ev_buffer = c3.number_input(
+                    "Safety buffer (kWh)", value=2.0, min_value=0.0, step=0.1, key="ev_buffer",
+                    help="Extra buffer for detours and weather"
+                )
+                
+                st.markdown("**Hardware Constraints**")
+                c1, c2 = st.columns(2)
+                ev_max_charge = c1.number_input(
+                    "Max charge power (kW)", value=7.4, min_value=0.1, step=0.1, key="ev_max_charge",
+                    help="Charger power limit (kW)"
+                )
+                ev_charge_eff = c2.slider(
+                    "Charge efficiency (%)", 80.0, 99.0, 90.0, key="ev_charge_eff",
+                    help="AC→DC conversion efficiency"
+                ) / 100.0
+            
+            # Calculate derived parameters
+            ev_trip_plan = EVTripPlan(
+                departure_hour=ev_departure_hour,
+                round_trip_km=ev_distance_km,
+                efficiency_km_per_kwh=ev_efficiency,
+                safety_buffer_kwh=ev_buffer,
+            )
+            ev_energy_needed = calculate_trip_energy_required(ev_trip_plan)
+            ev_charging_window = simulate_ev_charging_window(hours, ev_arrival_hour, ev_departure_hour)
+            available_hours = np.sum(ev_charging_window) * dt_hours
+            
+            # Derived battery parameters (read-only)
+            st.markdown("**Current state** *(measured, t=0)*")
+            soc_slider = st.slider(
+                "Current SoC (%)", 0, 100, 
+                int(ev_current_soc * 100), 
+                disabled=True,
+                help="As entered above"
+            )
+            
+            st.markdown("**Constraints** *(derived from trip plan)*")
+            c1, c2 = st.columns(2)
+            c1.number_input(
+                "Energy capacity (kWh)", value=ev_capacity, 
+                disabled=True,
+                help="As entered above"
+            )
+            min_soc_pct = (ev_energy_needed / ev_capacity) * 100 if ev_capacity > 0 else 0
+            max_soc_pct = 100.0
+            c2.slider(
+                "Min / max SoC (%)", 0, 100,
+                (int(min_soc_pct), int(max_soc_pct)),
+                disabled=True,
+                help="Min: trip requirement; Max: can charge to 100%"
+            )
+            
+            c1, c2 = st.columns(2)
+            c1.number_input(
+                "Max charge power (kW)", value=ev_max_charge,
+                disabled=True,
+                help="As entered above"
+            )
+            c2.number_input(
+                "Max discharge power (kW)", value=0.0,
+                disabled=True,
+                help="One-way charger (AC→DC only, no V2G)"
+            )
+            
+            c1, c2 = st.columns(2)
+            c1.slider(
+                "Charge efficiency", 0.0, 1.0, ev_charge_eff, step=0.01,
+                disabled=True,
+                help="AC→DC efficiency as entered above"
+            )
+            c2.slider(
+                "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
+                disabled=True,
+                help="No discharging (one-way charger)"
+            )
+            
+            # Visualizations
+            st.markdown("**Forecast** — charging window and trip energy requirement")
+            
+            ev_discharge_demand_forecast = trip_to_discharge_demand_forecast(ev_trip_plan, hours)
+            st.plotly_chart(
+                viz.plot_discharge_demand_forecast(hours, ev_discharge_demand_forecast),
+                width='stretch', key="chart_ev_demand_forecast",
+            )
+            
+            st.markdown("**Control**")
+            st.caption("Battery Charge Power (kW) — set by the optimizer. Zero when EV not plugged in.")
+    else:
+        ev_trip_plan = None
+        ev_energy_needed = 0.0
+        ev_charging_window = np.zeros(len(hours))
+        ev_current_soc = 0.0
+        ev_capacity = 50.0
+        ev_arrival_hour = 17.0
+        ev_departure_hour = 9.0
+        ev_distance_km = 30.0
+        ev_efficiency = 5.0
+        ev_buffer = 2.0
+        ev_max_charge = 7.4
+        ev_charge_eff = 0.90
+
     st.header("Loads")
 
     # --- Home Consumption ---
@@ -507,6 +654,19 @@ if dhw_tank_enabled and dhw_battery_params:
         passive_discharge_power=dhw_battery_params.passive_discharge_power_kw,
         charge_efficiency=dhw_battery_params.charge_efficiency, discharge_efficiency=dhw_battery_params.discharge_efficiency,
         demand_forecast=dhw_demand_forecast_full,
+    ))
+
+if ev_enabled and ev_trip_plan:
+    # Create discharge demand forecast for EV trip
+    ev_discharge_demand = trip_to_discharge_demand_forecast(ev_trip_plan, hours)
+    storages.append(Storage(
+        "EV Battery", current_soc=ev_current_soc, capacity=ev_capacity,
+        min_soc=0.0, max_soc=1.0,  # EV can discharge fully if needed
+        max_charge_power=ev_max_charge, max_discharge_power=0.0,  # One-way charger only
+        passive_discharge_power=0.0,  # Minimal for parked EV
+        charge_efficiency=ev_charge_eff, discharge_efficiency=1.0,  # No discharging
+        demand_forecast=ev_discharge_demand,
+        charging_window=ev_charging_window,  # Binary availability window
     ))
 
 load = Load(
@@ -627,16 +787,18 @@ with tab_optimization:
             # Multi-storage SoC trajectories
             hours_ext = np.append(result.hours, result.hours[-1] + dt_hours) if len(result.hours) else result.hours
             
-            # Get min/max SoC for each storage
+            # Get min/max SoC and capacity for each storage
             soc_bounds = {}
+            capacity_dict = {}
             for storage in storages:
                 soc_bounds[storage.name] = (storage.min_soc, storage.max_soc)
+                capacity_dict[storage.name] = storage.capacity
             
             # Build dict for visualization: {storage_name: soc_array}
             soc_dict = {name: data["soc"] for name, data in result.storages.items()}
             
             st.plotly_chart(
-                viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds, horizon_hours=horizon_hours),
+                viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds, capacity_dict=capacity_dict, horizon_hours=horizon_hours),
                 width='stretch', key="chart_soc_local",
             )
 
@@ -727,16 +889,18 @@ with tab_optimization:
                         if evcc_result.storages:
                             hours_ext_evcc = np.append(result.hours[:n_evcc], result.hours[n_evcc - 1] + dt_hours) if n_evcc > 0 else np.array([])
                             
-                            # Get min/max SoC bounds for each storage
+                            # Get min/max SoC bounds and capacity for each storage
                             soc_bounds_evcc = {}
+                            capacity_dict_evcc = {}
                             for storage in storages:
                                 soc_bounds_evcc[storage.name] = (storage.min_soc, storage.max_soc)
+                                capacity_dict_evcc[storage.name] = storage.capacity
                             
                             # Build dict for visualization: {storage_name: soc_array}
                             soc_dict_evcc = {name: data["soc"] for name, data in evcc_result.storages.items()}
                             
                             st.plotly_chart(
-                                viz.plot_soc_trajectory_multi(hours_ext_evcc, soc_dict_evcc, soc_bounds_evcc, horizon_hours=horizon_hours),
+                                viz.plot_soc_trajectory_multi(hours_ext_evcc, soc_dict_evcc, soc_bounds_evcc, capacity_dict=capacity_dict_evcc, horizon_hours=horizon_hours),
                                 width='stretch', key="chart_soc_evcc",
                             )
                     else:

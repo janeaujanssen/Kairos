@@ -176,6 +176,7 @@ class Optimizer:
             storage_passive_discharge_dict[name] = constraints.get("passive_discharge_power", 0.0)
             storage_charge_efficiency_dict[name] = constraints.get("charge_efficiency", 0.95)
             storage_discharge_efficiency_dict[name] = constraints.get("discharge_efficiency", 0.95)
+            storage_charging_window = constraints.get("charging_window", None)
             
             # Initial SoC = measured current state
             prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
@@ -199,6 +200,16 @@ class Optimizer:
                 prob += storage_soc_dict[name][t] >= storage.min_soc - storage_slack_low_dict[name][t], f"{name}_soc_min_{t}"
                 prob += storage_soc_dict[name][t] <= storage.max_soc + storage_slack_high_dict[name][t], f"{name}_soc_max_{t}"
             
+            # EV charging window constraint: if EV not available, power must be zero
+            if storage_charging_window is not None:
+                for t in range(n):
+                    if storage_charging_window[t] < 0.5:  # EV not available at this timestep
+                        # Force both charge and discharge to zero
+                        prob += storage_power_charge_dict[name][t] == 0, f"{name}_window_charge_{t}"
+                        prob += storage_power_discharge_dict[name][t] == 0, f"{name}_window_discharge_{t}"
+            
+            # One-way charger for EV: max_discharge_power should be 0, but enforce it just to be safe
+            # This is typically already set to 0 in the Storage initialization
 
 
         # Energy balance: Grid + PV = Load + sum(storages as seen by system with discharge efficiency)

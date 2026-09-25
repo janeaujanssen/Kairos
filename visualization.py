@@ -221,6 +221,7 @@ def plot_soc_trajectory_multi(
     hours_extended: np.ndarray,
     soc_dict: dict,
     bounds_dict: dict,
+    capacity_dict: dict = None,
     horizon_hours: float = 24.0,
 ) -> go.Figure:
     """Plot SoC trajectories for multiple storage assets.
@@ -229,6 +230,7 @@ def plot_soc_trajectory_multi(
         hours_extended: Time array (includes t=0 through t=T)
         soc_dict: {storage_name: soc_array} where soc_array is normalized 0-1
         bounds_dict: {storage_name: (min_soc, max_soc)} with normalized bounds
+        capacity_dict: {storage_name: capacity_kwh} for tooltip display (optional)
     """
     fig = go.Figure()
     
@@ -239,12 +241,26 @@ def plot_soc_trajectory_multi(
     for i, (storage_name, soc_array) in enumerate(soc_dict.items()):
         color = colors[i % len(colors)]
         min_soc, max_soc = bounds_dict.get(storage_name, (0.0, 1.0))
+        capacity_kwh = capacity_dict.get(storage_name) if capacity_dict else None
+        
+        # Calculate energy in kWh for each point (SoC% * capacity)
+        if capacity_kwh is not None:
+            energy_kwh = soc_array * capacity_kwh
+            hovertemplate = (
+                "<b>" + storage_name + "</b><br>"
+                "%{y:.1f}% (%{customdata:.2f} kWh)<extra></extra>"
+            )
+            customdata = energy_kwh
+        else:
+            hovertemplate = "<b>" + storage_name + "</b><br>%{y:.1f}%<extra></extra>"
+            customdata = None
         
         fig.add_trace(
             go.Scatter(
                 x=hours_extended, y=soc_array * 100, mode="lines+markers",
                 name=storage_name, line=dict(color=color, width=2),
-                hovertemplate="<b>" + storage_name + "</b><br>%{y:.1f}%<extra></extra>",
+                hovertemplate=hovertemplate,
+                customdata=customdata,
             )
         )
         fig.add_hline(y=min_soc * 100, line_dash="dot", line_color=color,
@@ -364,3 +380,5 @@ def plot_comparison_power(
             )
         )
     return _layout(fig, "Net grid power: local vs. EVCC", "kW")
+
+
