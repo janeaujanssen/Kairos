@@ -42,6 +42,7 @@ class DHWEquivalentBatteryParams:
     passive_discharge_power_kw: float # Heat loss power at current temperature (kW)
     charge_efficiency: float          # Heat pump COP (converted to battery efficiency)
     discharge_efficiency: float       # Always 1.0 (no active discharge)
+    discharge_to_electrical_network: bool = False  # Thermal discharge stays internal (DHW heating)
 
 
 def convert_dhw_params(physical: DHWPhysicalParams) -> DHWEquivalentBatteryParams:

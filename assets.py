@@ -123,6 +123,7 @@ class Storage(Asset):
         discharge_efficiency: float = 0.95,
         demand_forecast: Optional[np.ndarray] = None,
         charging_window: Optional[np.ndarray] = None,
+        discharge_to_electrical_network: bool = True,
     ):
         super().__init__(name)
         self.current_soc = current_soc                # fraction 0-1, measured at t=0
@@ -136,6 +137,7 @@ class Storage(Asset):
         self.discharge_efficiency = discharge_efficiency  # efficiency when releasing energy (0-1, e.g., 0.95 = 95% available, 5% lost as heat)
         self.demand_forecast = demand_forecast  # kWh per timestep, energy that must be discharged (e.g., hot water demand)
         self.charging_window = charging_window  # Binary array for EV: 1.0 when available, 0.0 otherwise
+        self.discharge_to_electrical_network = discharge_to_electrical_network  # True if discharge power contributes to grid balance
         self._power_schedule: Optional[np.ndarray] = None  # set by optimizer after solve
 
     def get_state(self) -> dict:
@@ -150,6 +152,7 @@ class Storage(Asset):
             "max_discharge_power": self.max_discharge_power,
             "charge_efficiency": self.charge_efficiency,
             "discharge_efficiency": self.discharge_efficiency,
+            "discharge_to_electrical_network": self.discharge_to_electrical_network,
         }
         if self.passive_discharge_power is not None:
             c["passive_discharge_power"] = self.passive_discharge_power

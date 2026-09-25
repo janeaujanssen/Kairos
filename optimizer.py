@@ -71,7 +71,13 @@ class OptimizationResult:
 
     cost_energy: float = 0.0
     cost_penalty: float = 0.0
+    non_electrical_discharge_benefit: float = 0.0  # Benefit from non-electrical storage discharge (reduces grid heating cost)
     cost_total: float = 0.0
+    
+    # Per-interval cost breakdowns for visualization
+    cost_energy_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
+    non_electrical_discharge_benefit_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
+    cost_penalty_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
 
     violations: List[Violation] = field(default_factory=list)
 
@@ -154,6 +160,7 @@ class Optimizer:
         storage_passive_discharge_dict = {}  # {storage_name: passive_loss_kW}
         storage_charge_efficiency_dict = {}  # {storage_name: eta_c}
         storage_discharge_efficiency_dict = {}  # {storage_name: eta_d}
+        storage_discharge_to_network_dict = {}  # {storage_name: bool, whether discharge contributes to grid}
         
         for storage in self.storages:
             name = storage.name
@@ -176,7 +183,18 @@ class Optimizer:
             storage_passive_discharge_dict[name] = constraints.get("passive_discharge_power", 0.0)
             storage_charge_efficiency_dict[name] = constraints.get("charge_efficiency", 0.95)
             storage_discharge_efficiency_dict[name] = constraints.get("discharge_efficiency", 0.95)
+            storage_discharge_to_network_dict[name] = constraints.get("discharge_to_electrical_network", True)
             storage_charging_window = constraints.get("charging_window", None)
+            
+            # Mutual exclusivity constraint: battery can either charge OR discharge in each timestep, not both.
+            # Use binary variables to enforce this. This prevents unphysical energy arbitrage when charge_efficiency
+            # and discharge_efficiency create exploitable asymmetry (e.g., charge_eff=2, discharge_eff=0.95).
+            storage_mode_vars = [pulp.LpVariable(f"{name}_mode_{t}", cat='Binary') for t in range(n)]
+            for t in range(n):
+                # mode_t = 0: charging mode (p_discharge = 0)
+                # mode_t = 1: discharging mode (p_charge = 0)
+                prob += storage_power_charge_dict[name][t] <= storage.max_charge_power * (1 - storage_mode_vars[t]), f"{name}_charge_if_charging_mode_{t}"
+                prob += storage_power_discharge_dict[name][t] <= storage.max_discharge_power * storage_mode_vars[t], f"{name}_discharge_if_discharging_mode_{t}"
             
             # Initial SoC = measured current state
             prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
@@ -194,6 +212,13 @@ class Optimizer:
                     ((storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss - demand_power[t]) * dt) / storage.capacity,
                     f"{name}_soc_dynamics_{t}",
                 )
+            
+            # Hard constraint: SoC at time t must be high enough to satisfy demand at time t
+            # Without this, the optimizer could allow SoC to drop below the required level
+            # Constraint: SoC[t] >= (demand_power[t] * dt / capacity)
+            for t in range(n):
+                if demand_power[t] > VIOLATION_EPS:  # Only enforce if demand is non-negligible
+                    prob += storage_soc_dict[name][t] >= (demand_power[t] * dt / storage.capacity), f"{name}_demand_requirement_{t}"
             
             # Soft SoC bounds
             for t in range(n + 1):
@@ -214,10 +239,15 @@ class Optimizer:
 
         # Energy balance: Grid + PV = Load + sum(storages as seen by system with discharge efficiency)
         # For each storage: system provides p_c (charging) and receives p_d * eta_d (discharging)
-        # So total system power from storages = sum(p_c - p_d * eta_d)
+        # Only include discharge in energy balance if discharge_to_electrical_network=True (e.g., battery, EV)
+        # For thermal storage (building, DHW), discharge doesn't return to grid, so it doesn't affect energy balance
         for t in range(n):
             total_storage_system_power = pulp.lpSum(
-                storage_power_charge_dict[s.name][t] - storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name]
+                storage_power_charge_dict[s.name][t] - (
+                    storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name]
+                    if storage_discharge_to_network_dict[s.name]
+                    else 0
+                )
                 for s in self.storages
             )
             prob += (
@@ -252,7 +282,17 @@ class Optimizer:
             # Small penalty on exporting PV to grid -> optimizer prefers charging storage first
             tie_break_term += eps * dt * pulp.lpSum(p_export[t] for t in range(n))
 
-        prob += energy_term + penalty_term + tie_break_term, "objective"
+        # Non-electrical discharge benefit: for storages that don't return energy to the grid
+        # (e.g., building thermal, DHW), discharging provides benefit equal to avoided grid heating cost
+        # Benefit = (discharge_power * discharge_efficiency) / charge_efficiency * price
+        # (the electrical equivalent of useful thermal energy avoided via heat pump)
+        non_electrical_discharge_benefit = dt * pulp.lpSum(
+            storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name] / storage_charge_efficiency_dict[s.name] * price_import[t]
+            for s in self.storages if not storage_discharge_to_network_dict[s.name]
+            for t in range(n)
+        )
+
+        prob += energy_term + penalty_term + tie_break_term - non_electrical_discharge_benefit, "objective"
 
         solver_options = ["maxN", str(int(self.max_iterations))] if self.max_iterations else []
         try:
@@ -287,24 +327,46 @@ class Optimizer:
                 "passive_discharge": np.full(n, storage_passive_discharge_dict[name], dtype=float),
             }
 
-        cost_energy = float(
-            np.sum(result.grid_import * price_import - result.grid_export * price_export) * dt
-        )
+        # Per-interval grid energy cost (€/interval)
+        cost_energy_per_interval = (result.grid_import * price_import - result.grid_export * price_export) * dt
+        cost_energy = float(np.sum(cost_energy_per_interval))
+        
+        # Calculate per-interval non-electrical discharge benefit: value from discharging internal storage (building, DHW)
+        # Benefit = (discharge_power * discharge_efficiency) / charge_efficiency * grid_price
+        # Represents the avoided heating cost via grid heat pump at high prices
+        non_electrical_discharge_benefit_per_interval = np.zeros(n, dtype=float)
+        non_electrical_discharge_benefit = 0.0
+        for storage in self.storages:
+            name = storage.name
+            if not storage_discharge_to_network_dict[name]:  # Only for non-electrical storage
+                p_d = np.array([val(v) for v in storage_power_discharge_dict[name]])
+                eta_d = storage_discharge_efficiency_dict[name]
+                eta_c = storage_charge_efficiency_dict[name]
+                benefit_per_interval = p_d * eta_d / eta_c * price_import * dt
+                non_electrical_discharge_benefit_per_interval += benefit_per_interval
+                non_electrical_discharge_benefit += np.sum(benefit_per_interval)
         
         total_slack_low = 0.0
         total_slack_high = 0.0
+        cost_penalty_per_interval = np.zeros(n, dtype=float)
         for storage in self.storages:
             name = storage.name
             slack_low = np.array([val(v) for v in storage_slack_low_dict[name]])
             slack_high = np.array([val(v) for v in storage_slack_high_dict[name]])
             total_slack_low += slack_low.sum()
             total_slack_high += slack_high.sum()
+            # For per-interval penalty, use only the first n elements (one per interval, excluding final state)
+            cost_penalty_per_interval += self.soft_penalty * (slack_low[:n] + slack_high[:n])
         
         penalty_cost = float(self.soft_penalty * (total_slack_low + total_slack_high))
 
         result.cost_energy = cost_energy
         result.cost_penalty = penalty_cost
-        result.cost_total = cost_energy + penalty_cost
+        result.non_electrical_discharge_benefit = float(non_electrical_discharge_benefit)
+        result.cost_total = cost_energy + penalty_cost - non_electrical_discharge_benefit
+        result.cost_energy_per_interval = cost_energy_per_interval
+        result.non_electrical_discharge_benefit_per_interval = non_electrical_discharge_benefit_per_interval
+        result.cost_penalty_per_interval = cost_penalty_per_interval
         obj_val = pulp.value(prob.objective)
         result.objective_value = float(obj_val) if obj_val is not None else None
 

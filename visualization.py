@@ -291,8 +291,10 @@ def plot_cost_analysis(
     price_import: np.ndarray,
     price_export: np.ndarray,
     horizon_hours: float = 24.0,
+    benefit_per_interval: np.ndarray = None,
+    penalty_per_interval: np.ndarray = None,
 ) -> go.Figure:
-    """Plot cost analysis: per-interval cost bars + cumulative cost line with profit/loss indication.
+    """Plot cost analysis: per-interval cost components + cumulative cost line.
     
     Args:
         hours: Time array (hours)
@@ -300,27 +302,59 @@ def plot_cost_analysis(
         grid_export: Grid export power per interval (kW)
         price_import: Import price per interval (€/kWh)
         price_export: Export price per interval (€/kWh)
+        benefit_per_interval: Non-electrical discharge benefit per interval (€) [optional]
+        penalty_per_interval: Constraint violation penalty per interval (€) [optional]
     """
     # Calculate time interval in hours from the hours array
     dt_hours = hours[1] - hours[0] if len(hours) > 1 else 1.0
     
-    # Calculate cost per interval (€)
+    # Calculate grid energy cost per interval (€)
     # Positive = cost (importing), Negative = profit (exporting)
-    # Must multiply by dt_hours to convert from power (kW) × price (€/kWh) to energy cost (€)
-    cost_per_interval = (grid_import * price_import - grid_export * price_export) * dt_hours
-    cumulative_cost = np.cumsum(cost_per_interval)
+    grid_cost_per_interval = (grid_import * price_import - grid_export * price_export) * dt_hours
+    
+    # Use provided benefit and penalty arrays, or default to zeros
+    if benefit_per_interval is None:
+        benefit_per_interval = np.zeros_like(grid_cost_per_interval)
+    if penalty_per_interval is None:
+        penalty_per_interval = np.zeros_like(grid_cost_per_interval)
+    
+    # Total cost per interval = grid cost + penalty - benefit
+    total_cost_per_interval = grid_cost_per_interval + penalty_per_interval - benefit_per_interval
+    cumulative_cost = np.cumsum(total_cost_per_interval)
     
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Bar chart for per-interval cost (colored by profit/loss)
-    colors = ["#d62728" if c > 0 else "#2ca02c" for c in cost_per_interval]
+    # Add grid energy cost bars (red for cost, green for profit)
+    colors_grid = ["#d62728" if c > 0 else "#2ca02c" for c in grid_cost_per_interval]
     fig.add_trace(
         go.Bar(
-            x=hours, y=cost_per_interval,
-            name="Cost per interval",
-            marker=dict(color=colors),
-            hovertemplate="<b>Cost per interval</b><br>€%{y:.2f}<extra></extra>",
+            x=hours, y=grid_cost_per_interval,
+            name="Grid energy cost",
+            marker=dict(color=colors_grid),
+            hovertemplate="<b>Grid energy cost</b><br>€%{y:.2f}<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    # Add benefit bars (blue, negative contribution to cost)
+    fig.add_trace(
+        go.Bar(
+            x=hours, y=-benefit_per_interval,  # Negative because it reduces cost
+            name="Non-electrical discharge benefit",
+            marker=dict(color="#1f77b4"),
+            hovertemplate="<b>Non-electrical discharge benefit</b><br>€%{y:.2f}<extra></extra>",
+        ),
+        secondary_y=False
+    )
+    
+    # Add penalty bars (orange)
+    fig.add_trace(
+        go.Bar(
+            x=hours, y=penalty_per_interval,
+            name="Violation penalty",
+            marker=dict(color="#ff7f0e"),
+            hovertemplate="<b>Violation penalty</b><br>€%{y:.2f}<extra></extra>",
         ),
         secondary_y=False
     )
@@ -341,13 +375,14 @@ def plot_cost_analysis(
     fig.add_hline(y=0, line_dash="dash", line_color="rgba(128, 128, 128, 0.3)", line_width=1)
     
     fig.update_layout(
-        title="Cost Analysis (Red=Cost, Green=Profit)",
+        title="Cost Analysis",
         xaxis_title="Time (h)",
         margin=dict(l=40, r=20, t=40, b=40),
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
         xaxis=dict(domain=[0.02, 0.95], range=[0, horizon_hours]),  # Fixed plot area width, dynamic x-axis range
+        barmode="relative",  # Stack bars
     )
     
     fig.update_yaxes(title_text="Cost per Interval (€)", secondary_y=False)

@@ -12,6 +12,7 @@ enough to add them later without touching the optimizer's structure.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import streamlit as st
 
 from assets import Source, Storage, Load
@@ -26,6 +27,7 @@ from simulator import (
 from optimizer import Optimizer, OptimizationResult
 from evcc_client import run_evcc_optimization, EVCCResult, DEFAULT_EVCC_URL
 from dhw_conversion import DHWPhysicalParams, convert_dhw_params
+from building_conversion import BuildingThermalParams, convert_building_params
 from ev_conversion import EVTripPlan, calculate_trip_energy_required, trip_to_discharge_demand_forecast, simulate_ev_charging_window
 import visualization as viz
 
@@ -72,6 +74,7 @@ st.sidebar.subheader("Assets")
 battery_1_enabled = st.sidebar.checkbox("🔋 Battery 1", value=True)
 battery_2_enabled = st.sidebar.checkbox("🔋 Battery 2", value=False)
 dhw_tank_enabled = st.sidebar.checkbox("💧 DHW Tank", value=False)
+building_enabled = st.sidebar.checkbox("🏢 Building Thermal Mass", value=False)
 ev_enabled = st.sidebar.checkbox("🚗 EV Battery", value=False)
 
 st.sidebar.subheader("Configuration")
@@ -345,7 +348,8 @@ with tab_inputs:
                     "Current SoC (%)", 0, 100, 
                     int(dhw_battery_params.current_soc * 100), 
                     disabled=True,
-                    help="Derived from current water temperature and temperature range"
+                    help="Derived from current water temperature and temperature range",
+                    key="dhw_current_soc"
                 ) / 100.0
 
                 st.markdown("**Constraints** *(derived from physical parameters)*")
@@ -360,7 +364,8 @@ with tab_inputs:
                     "Min / max SoC (%)", 0, 100, 
                     (int(dhw_battery_params.min_soc * 100), int(dhw_battery_params.max_soc * 100)),
                     disabled=True,
-                    help="Min: comfort constraint; Max: maximum safe temperature"
+                    help="Min: comfort constraint; Max: maximum safe temperature",
+                    key="dhw_min_max_soc"
                 )
                 dhw_min_soc = dhw_min_soc_val / 100.0
                 dhw_max_soc = dhw_max_soc_val / 100.0
@@ -390,12 +395,14 @@ with tab_inputs:
                 dhw_charge_efficiency = c1.slider(
                     "Charge efficiency", 0.0, 5.0, dhw_cop, step=0.01,
                     disabled=True,
-                    help="Derived from Heat pump COP. Shows the charge efficiency used by the optimizer."
+                    help="Derived from Heat pump COP. Shows the charge efficiency used by the optimizer.",
+                    key="dhw_charge_eff"
                 )
                 dhw_discharge_efficiency = c2.slider(
                     "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
                     disabled=True,
-                    help="Thermal storage has no discharge losses (1.0)"
+                    help="Thermal storage has no discharge losses (1.0)",
+                    key="dhw_discharge_eff"
                 )
 
                 st.markdown("**Forecast** — hot water demand")
@@ -434,6 +441,139 @@ with tab_inputs:
     else:
         dhw_battery_params = None
 
+    # --- Building Thermal Mass ---
+    if building_enabled:
+        with st.expander("🏢 Building Thermal Mass", expanded=False):
+            # Physical parameters section with light blue background
+            st.markdown("**Physical Parameters** *(editable)*")
+            with st.container():
+                st.markdown(
+                    '<div style="background-color: #E3F2FD; padding: 12px; border-radius: 5px; margin-bottom: 15px;">'
+                    '<small><i>Physical building thermal properties below. Derived battery parameters computed automatically.</i></small>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                c1, c2 = st.columns(2)
+                building_capacitance = c1.number_input(
+                    "Thermal capacitance (kWh/K)", value=25.0, min_value=1.0, step=1.0, key="building_capacitance",
+                    help="Energy needed to raise building temperature by 1°C (range: 5-30 for typical homes)"
+                )
+                building_time_constant = c2.number_input(
+                    "Time constant (hours)", value=8.0, min_value=1.0, step=0.5, key="building_time_constant",
+                    help="Hours for building to cool by 1°C when heating is off (thermal inertia)"
+                )
+                
+                c1, c2 = st.columns(2)
+                building_baseline_temp = c1.number_input(
+                    "Baseline temp (°C)", value=20.0, min_value=-10.0, max_value=30.0, step=0.5, key="building_baseline_temp",
+                    help="Temperature maintained by weather compensation heating curve"
+                )
+                building_max_comfort_temp = c2.number_input(
+                    "Max comfort temp (°C)", value=21.0, min_value=-10.0, max_value=30.0, step=0.5, key="building_max_comfort_temp",
+                    help="Maximum comfortable indoor temperature"
+                )
+                
+                building_current_temp = st.number_input(
+                    "Current indoor temp (°C)", value=20.5, min_value=-10.0, max_value=30.0, step=0.1, key="building_current_temp",
+                    help="Measured indoor temperature at t=0"
+                )
+                
+                building_max_charge_power = st.number_input(
+                    "Heat pump power (kW)", value=5.0, min_value=0.0, step=0.1, key="building_max_charge_power",
+                    help="Maximum heating power available from heat pump"
+                )
+                
+                building_cop = st.number_input(
+                    "Heat pump COP", value=3.0, min_value=0.5, max_value=5.0, step=0.1, key="building_cop",
+                    help="Coefficient of Performance: thermal output / electrical input. Typical 2.5-4.0 for air-to-water heat pumps."
+                )
+            
+            # Calculate equivalent battery parameters
+            try:
+                building_physical = BuildingThermalParams(
+                    thermal_capacitance_kwh_per_k=building_capacitance,
+                    time_constant_hours=building_time_constant,
+                    baseline_temp_celsius=building_baseline_temp,
+                    max_comfort_temp_celsius=building_max_comfort_temp,
+                    current_indoor_temp_celsius=building_current_temp,
+                )
+                building_battery_params = convert_building_params(building_physical)
+            except ValueError as e:
+                st.error(f"Invalid building parameters: {e}")
+                building_battery_params = None
+            
+            if building_battery_params:
+                st.markdown("**Current state** *(measured, t=0)*")
+                building_current_soc = st.slider(
+                    "Current SoC (%)", 0, 100, 
+                    int(building_battery_params["current_soc"] * 100), 
+                    disabled=True,
+                    help="Derived from current indoor temperature",
+                    key="building_current_soc"
+                ) / 100.0
+
+                st.markdown("**Constraints** *(derived from physical parameters)*")
+                c1, c2 = st.columns(2)
+                building_capacity = c1.number_input(
+                    "Energy capacity (kWh)", value=building_battery_params["capacity"], 
+                    min_value=0.1,
+                    disabled=True,
+                    help="Thermal energy storage between baseline and comfort temperatures"
+                )
+                building_min_soc_val, building_max_soc_val = c2.slider(
+                    "Min / max SoC (%)", 0, 100, 
+                    (int(building_battery_params["min_soc"] * 100), int(building_battery_params["max_soc"] * 100)),
+                    disabled=True,
+                    help="Min: discharge to baseline; Max: charge to comfort limit",
+                    key="building_min_max_soc"
+                )
+                building_min_soc = building_min_soc_val / 100.0
+                building_max_soc = building_max_soc_val / 100.0
+                
+                c1, c2 = st.columns(2)
+                building_max_charge = c1.number_input(
+                    "Max charge power (kW)", value=building_max_charge_power,
+                    min_value=0.0,
+                    help="Heat pump active pre-heating power"
+                )
+                building_max_discharge = c2.number_input(
+                    "Max discharge power (kW)", value=building_battery_params["max_discharge_power"],
+                    min_value=0.0,
+                    disabled=True,
+                    help="Passive cooling rate = capacity / time_constant"
+                )
+                
+                building_passive_discharge = st.number_input(
+                    "Passive discharge power (kW)", value=building_battery_params["passive_discharge_power"],
+                    min_value=0.0, step=0.001,
+                    disabled=True,
+                    help="Zero: baseline heating curve maintains baseline temperature"
+                )
+                
+                c1, c2 = st.columns(2)
+                building_charge_efficiency = c1.slider(
+                    "Charge efficiency", 0.0, 5.0, building_cop, step=0.01,
+                    disabled=True,
+                    help="Derived from Heat pump COP. Shows the charge efficiency used by the optimizer.",
+                    key="building_charge_eff"
+                )
+                building_discharge_efficiency = c2.slider(
+                    "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
+                    disabled=True,
+                    help="Passive cooling has no losses (1.0)",
+                    key="building_discharge_eff"
+                )
+
+                st.markdown("**Forecast**")
+                st.caption("— None; building behavior is determined by passive cooling and optimizer-controlled pre-heating.")
+
+                st.markdown("**Control**")
+                st.caption("Thermal Power (kW) — set by the optimizer via heat pump curve offset.")
+    else:
+        building_battery_params = None
+        building_max_charge = 5.0
+        building_cop = 3.0
+
     # --- EV Battery ---
     if ev_enabled:
         with st.expander("🚗 EV Battery", expanded=False):
@@ -453,7 +593,7 @@ with tab_inputs:
                     help="Total usable battery capacity"
                 )
                 ev_current_soc = c2.slider(
-                    "Current SoC (%)", 0, 100, 30, key="ev_current_soc",
+                    "Current SoC (%)", 0, 100, 15, key="ev_current_soc",
                     help="Current state of charge"
                 ) / 100.0
                 
@@ -471,7 +611,7 @@ with tab_inputs:
                 st.markdown("**Trip Plan**")
                 c1, c2, c3 = st.columns(3)
                 ev_distance_km = c1.number_input(
-                    "Round trip distance (km)", value=30.0, min_value=1.0, step=1.0, key="ev_distance_km",
+                    "Round trip distance (km)", value=100.0, min_value=1.0, step=1.0, key="ev_distance_km",
                     help="Total distance to be driven (km)"
                 )
                 ev_efficiency = c2.number_input(
@@ -514,22 +654,17 @@ with tab_inputs:
                 help="As entered above"
             )
             
-            st.markdown("**Constraints** *(derived from trip plan)*")
+            st.markdown("**Constraints** *(battery life limits; editable)*")
             c1, c2 = st.columns(2)
             c1.number_input(
                 "Energy capacity (kWh)", value=ev_capacity, 
                 disabled=True,
                 help="As entered above"
             )
-            min_soc_pct = (ev_energy_needed / ev_capacity) * 100 if ev_capacity > 0 else 0
-            max_soc_pct = 100.0
-            c2.slider(
-                "Min / max SoC (%)", 0, 100,
-                (int(min_soc_pct), int(max_soc_pct)),
-                disabled=True,
-                help="Min: trip requirement; Max: can charge to 100%"
+            ev_min_soc_pct, ev_max_soc_pct = c2.slider(
+                "Min / max SoC (%)", 0, 100, (10, 90), key="ev_soc_range",
+                help="Battery life bounds: protect from deep discharge and overcharge"
             )
-            
             c1, c2 = st.columns(2)
             c1.number_input(
                 "Max charge power (kW)", value=ev_max_charge,
@@ -546,20 +681,24 @@ with tab_inputs:
             c1.slider(
                 "Charge efficiency", 0.0, 1.0, ev_charge_eff, step=0.01,
                 disabled=True,
-                help="AC→DC efficiency as entered above"
+                help="AC→DC efficiency as entered above",
+                key="ev_charge_eff_display"
             )
             c2.slider(
                 "Discharge efficiency", 0.0, 1.0, 1.0, step=0.01,
                 disabled=True,
-                help="No discharging (one-way charger)"
+                help="No discharging (one-way charger)",
+                key="ev_discharge_eff_display"
             )
             
             # Visualizations
             st.markdown("**Forecast** — charging window and trip energy requirement")
             
-            ev_discharge_demand_forecast = trip_to_discharge_demand_forecast(ev_trip_plan, hours)
+            ev_discharge_demand_power = trip_to_discharge_demand_forecast(ev_trip_plan, hours, dt_hours)
+            # Convert power (kW) to energy (kWh) for visualization
+            ev_discharge_demand_energy = ev_discharge_demand_power * dt_hours
             st.plotly_chart(
-                viz.plot_discharge_demand_forecast(hours, ev_discharge_demand_forecast),
+                viz.plot_discharge_demand_forecast(hours, ev_discharge_demand_energy),
                 width='stretch', key="chart_ev_demand_forecast",
             )
             
@@ -654,14 +793,28 @@ if dhw_tank_enabled and dhw_battery_params:
         passive_discharge_power=dhw_battery_params.passive_discharge_power_kw,
         charge_efficiency=dhw_battery_params.charge_efficiency, discharge_efficiency=dhw_battery_params.discharge_efficiency,
         demand_forecast=dhw_demand_forecast_full,
+        discharge_to_electrical_network=dhw_battery_params.discharge_to_electrical_network,
+    ))
+
+if building_enabled and building_battery_params:
+    storages.append(Storage(
+        "Building Thermal Mass", current_soc=building_battery_params["current_soc"], capacity=building_battery_params["capacity"],
+        min_soc=building_battery_params["min_soc"], max_soc=building_battery_params["max_soc"],
+        max_charge_power=building_max_charge, max_discharge_power=building_battery_params["max_discharge_power"],
+        passive_discharge_power=building_battery_params["passive_discharge_power"],
+        charge_efficiency=building_cop, discharge_efficiency=1.0,  # COP from user input; discharge has no losses
+        discharge_to_electrical_network=building_battery_params["discharge_to_electrical_network"],
     ))
 
 if ev_enabled and ev_trip_plan:
     # Create discharge demand forecast for EV trip
-    ev_discharge_demand = trip_to_discharge_demand_forecast(ev_trip_plan, hours)
+    ev_discharge_demand = trip_to_discharge_demand_forecast(ev_trip_plan, hours, dt_hours)
+    # Convert user-entered percentages to fractions for optimizer
+    ev_min_soc_frac = ev_min_soc_pct / 100.0
+    ev_max_soc_frac = ev_max_soc_pct / 100.0
     storages.append(Storage(
         "EV Battery", current_soc=ev_current_soc, capacity=ev_capacity,
-        min_soc=0.0, max_soc=1.0,  # EV can discharge fully if needed
+        min_soc=ev_min_soc_frac, max_soc=ev_max_soc_frac,  # Battery life bounds (editable via sliders)
         max_charge_power=ev_max_charge, max_discharge_power=0.0,  # One-way charger only
         passive_discharge_power=0.0,  # Minimal for parked EV
         charge_efficiency=ev_charge_eff, discharge_efficiency=1.0,  # No discharging
@@ -678,30 +831,26 @@ load = Load(
 # Run optimization (local + optional EVCC) on button click
 # ----------------------------------------------------------------------------
 if run_clicked:
-    if not storages:
-        st.error("❌ Please enable at least one storage asset in the sidebar.")
-    else:
-        with st.spinner("Solving..."):
-            opt = Optimizer(
-                grid, pv, storages, load, hours, dt_hours,
-                mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
-                solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
-                soft_penalty=soft_penalty,
-            )
-            st.session_state.result = opt.solve()
+    with st.spinner("Solving..."):
+        opt = Optimizer(
+            grid, pv, storages, load, hours, dt_hours,
+            mode=mode, peak_leveling=peak_leveling, charging_priority=charging_priority,
+            solver_tolerance=solver_tolerance, max_iterations=int(max_iterations),
+            soft_penalty=soft_penalty,
+        )
+        st.session_state.result = opt.solve()
 
-            if evcc_enabled:
-                # EVCC integration now supports multiple storages (batteries)
-                if storages:
-                    st.session_state.evcc_result = run_evcc_optimization(
-                        grid, pv, storages, load, dt_hours, base_url=evcc_url,
-                        prc_p_exc_imp=evcc_prc_p_exc_imp,
-                    )
-                else:
-                    st.session_state.evcc_result = None
+        if evcc_enabled:
+            # EVCC integration now supports multiple storages (batteries)
+            if storages:
+                st.session_state.evcc_result = run_evcc_optimization(
+                    grid, pv, storages, load, dt_hours, base_url=evcc_url,
+                    prc_p_exc_imp=evcc_prc_p_exc_imp,
+                )
             else:
                 st.session_state.evcc_result = None
-
+        else:
+            st.session_state.evcc_result = None
 # ============================================================================
 # OPTIMIZATION TAB
 # ============================================================================
@@ -749,10 +898,11 @@ with tab_optimization:
                     st.success("No constraint violations.")
 
             st.markdown("**Cost metrics**")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Energy cost", f"€{result.cost_energy:.2f}")
-            m2.metric("Violation penalty", f"€{result.cost_penalty:.2f}")
-            m3.metric("Total cost", f"€{result.cost_total:.2f}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Grid energy cost", f"€{result.cost_energy:.2f}")
+            m2.metric("Non-electrical discharge benefit", f"−€{result.non_electrical_discharge_benefit:.2f}")
+            m3.metric("Violation penalty", f"€{result.cost_penalty:.2f}")
+            m4.metric("Total cost", f"€{result.cost_total:.2f}")
 
             st.markdown("**Current control commands (t=0)**")
             ctrl_cols = st.columns(len(result.storages) + 2)
@@ -780,6 +930,8 @@ with tab_optimization:
                     result.hours, result.grid_import, result.grid_export,
                     result.price_import, result.price_export,
                     horizon_hours=horizon_hours,
+                    benefit_per_interval=result.non_electrical_discharge_benefit_per_interval,
+                    penalty_per_interval=result.cost_penalty_per_interval,
                 ),
                 width='stretch', key="chart_cost_local",
             )
@@ -801,6 +953,83 @@ with tab_optimization:
                 viz.plot_soc_trajectory_multi(hours_ext, soc_dict, soc_bounds, capacity_dict=capacity_dict, horizon_hours=horizon_hours),
                 width='stretch', key="chart_soc_local",
             )
+        
+        # Display data tables (always shown)
+        st.divider()
+        st.subheader("Optimization Data Table")
+        
+        # Build combined table with power flow, cost analysis, and state of charge data
+        dt_hours = result.hours[1] - result.hours[0] if len(result.hours) > 1 else 1.0
+        hours_ext = np.append(result.hours, result.hours[-1] + dt_hours) if len(result.hours) else result.hours
+        n = len(result.hours)
+        
+        # Start with time
+        combined_data = {
+            "Time (h)": hours_ext.round(2),
+        }
+        
+        # Add power flow columns (pad with NaN for final row)
+        net_grid_power = result.grid_import - result.grid_export
+        combined_data["Grid Power (kW)"] = np.append(net_grid_power, np.nan).round(3)
+        combined_data["PV Production (kW)"] = np.append(result.pv_power, np.nan).round(3)
+        combined_data["Home Load (kW)"] = np.append(result.load_power, np.nan).round(3)
+        combined_data["Price Import (€/kWh)"] = np.append(result.price_import, np.nan).round(4)
+        combined_data["Price Export (€/kWh)"] = np.append(result.price_export, np.nan).round(4)
+        
+        # Add storage power columns
+        for storage_name, storage_data in result.storages.items():
+            combined_data[f"{storage_name} (+ch/-disch) (kW)"] = np.append(storage_data["power"], np.nan).round(3)
+        
+        # Add cost analysis columns (pad with NaN for final row)
+        cost_per_interval = result.cost_energy_per_interval + result.cost_penalty_per_interval - result.non_electrical_discharge_benefit_per_interval
+        cumulative_cost = np.cumsum(cost_per_interval)
+        combined_data["Grid Energy Cost (€)"] = np.append(result.cost_energy_per_interval, np.nan).round(3)
+        combined_data["Discharge Benefit (€)"] = np.append(result.non_electrical_discharge_benefit_per_interval, np.nan).round(3)
+        combined_data["Violation Penalty (€)"] = np.append(result.cost_penalty_per_interval, np.nan).round(3)
+        combined_data["Cumulative Cost (€)"] = np.append(cumulative_cost, cumulative_cost[-1] if len(cumulative_cost) > 0 else 0).round(2)
+        
+        # Build capacity mapping for kWh calculation
+        capacity_map = {storage.name: storage.capacity for storage in storages}
+        
+        # Add SoC columns for each storage (both % and kWh)
+        for storage_name, storage_data in result.storages.items():
+            soc_pct = (storage_data["soc"] * 100).round(2)
+            combined_data[f"{storage_name} SoC (%)"] = soc_pct
+            
+            # Calculate kWh from SoC and capacity
+            capacity_kwh = capacity_map.get(storage_name, 0)
+            soc_kwh = (storage_data["soc"] * capacity_kwh).round(2)
+            combined_data[f"{storage_name} Energy (kWh)"] = soc_kwh
+        
+        combined_df = pd.DataFrame(combined_data)
+        
+        # Apply background colors based on chart type
+        # Define color groups (excluding Time column)
+        power_flow_cols = {"Grid Power (kW)", "PV Production (kW)", "Home Load (kW)", 
+                           "Price Import (€/kWh)", "Price Export (€/kWh)"}
+        # Add storage power columns
+        power_flow_cols.update({col for col in combined_df.columns if "(+ch/-disch) (kW)" in col})
+        
+        cost_analysis_cols = {"Grid Energy Cost (€)", "Discharge Benefit (€)", 
+                             "Violation Penalty (€)", "Cumulative Cost (€)"}
+        
+        soc_cols = {col for col in combined_df.columns if "SoC (%)" in col or "Energy (kWh)" in col}
+        
+        # Apply styling function
+        def style_by_chart_type(col):
+            if col.name == "Time (h)":
+                return ['font-weight: bold'] * len(col)  # Bold but no background
+            elif col.name in power_flow_cols:
+                return ['background-color: #cce5ff'] * len(col)  # Light blue
+            elif col.name in cost_analysis_cols:
+                return ['background-color: #ffffcc'] * len(col)  # Light yellow
+            elif col.name in soc_cols:
+                return ['background-color: #ccffcc'] * len(col)  # Light green
+            else:
+                return [''] * len(col)
+        
+        styled_df = combined_df.style.apply(style_by_chart_type, axis=0)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
         # ---- EVCC comparison column ----
         if evcc_result is not None:
@@ -881,6 +1110,8 @@ with tab_optimization:
                                 result.price_import[:n_evcc],
                                 result.price_export[:n_evcc],
                                 horizon_hours=horizon_hours,
+                                benefit_per_interval=np.zeros(n_evcc),
+                                penalty_per_interval=np.zeros(n_evcc),
                             ),
                             width='stretch', key="chart_cost_evcc",
                         )

@@ -49,21 +49,22 @@ def calculate_trip_energy_required(trip: EVTripPlan) -> float:
 def trip_to_discharge_demand_forecast(
     trip: EVTripPlan,
     hours: np.ndarray,
+    dt_hours: float = 1.0,
 ) -> np.ndarray:
     """
     Convert a single trip plan to discharge_demand_forecast time-series.
     
-    Creates an array with energy spike at departure time, zero elsewhere.
-    The optimizer uses existing discharge_demand_forecast constraint:
-    SoC[departure_timestep] >= energy_required / capacity
+    Creates an array with power spike at departure time, zero elsewhere.
+    The optimizer then converts power → energy using: energy = power * dt_hours
     
     Args:
         trip: Trip plan specification
         hours: Time axis array (hours, float)
+        dt_hours: Timestep duration in hours (default 1.0)
         
     Returns:
         discharge_demand_forecast array (same length as hours)
-        Energy spike at departure timestep, zero elsewhere
+        Power (kW) spike at departure timestep, zero elsewhere
     """
     energy_needed = calculate_trip_energy_required(trip)
     
@@ -72,9 +73,10 @@ def trip_to_discharge_demand_forecast(
     hod = hours % 24  # hours of day
     departure_idx = np.argmin(np.abs(hod - (trip.departure_hour % 24)))
     
-    # Create demand forecast with spike at departure
+    # Create demand forecast with power spike at departure
+    # Power = Energy / Timestep Duration, so energy_in_interval = power * dt_hours
     demand = np.zeros(len(hours))
-    demand[departure_idx] = energy_needed
+    demand[departure_idx] = energy_needed / dt_hours
     
     return demand
 
