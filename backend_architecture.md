@@ -1,16 +1,31 @@
 # Contents
 
+- [Sign Convention](#sign-convention)
 - [Energy Devices Abstraction](#energy-devices-abstraction)
-    - [Overview](#overview)
-    - [Sign Convention](#sign-convention)
-    - [Sources](#sources)
-    - [Loads](#loads)
-    - [Storage](#storage)
-    - [Unified Storage Model](#unified-storage-model)
+  - [Overview](#overview)
+  - [Sources](#sources)
+  - [Loads](#loads)
+  - [Storage](#storage)
+  - [Unified Storage Model](#unified-storage-model)
 - [Optimizer](#optimizer)
-    - [High Level Process](#high-level-process)
-    - [Optimization Objective](#optimization-objective)
-    - [Outputs](#outputs)
+  - [High Level Process](#high-level-process)
+  - [Optimization Objective](#optimization-objective)
+  - [Constraints](#constraints)
+
+
+# Sign Convention
+
+All power flows follow a **consistent sign convention** to eliminate ambiguity in the energy balance:
+
+| Asset Class | Positive Direction | Negative Direction | Example |
+|---|---|---|---|
+| **Source Power** | Supply (Grid import, PV production) | Absorb (Grid export) | +5 kW = buying/producing, −3 kW = selling |
+| **Storage Power** | Charge (absorbing energy) | Discharge (supplying energy) | +2 kW = charging, −2 kW = discharging |
+| **Load Power** | Consumption (drawing energy) | — | Always ≥ 0 (demand is fixed at forecast) |
+
+This leads to the unified energy balance equation:
+
+$$\sum \text{Source Power} = \sum \text{Load Power} + \sum \text{Storage Power}$$
 
 # Energy Devices Abstraction
 ## Overview
@@ -34,8 +49,6 @@ Example:
 
 This abstraction allows the optimizer to reason about energy flows without requiring knowledge of the underlying technology.
 Each asset class has attributes that either describe its current state, act as a constraint or contain forecasts.
-
-## Sign Convention
 
 ## Sources
 
@@ -238,6 +251,8 @@ As a simple approach to controlling the building thermal mass using a heat pump,
 # Max comfort temperature: 21°C
 # Heating rate: 0.6 °C/hour (heat pump set +dT w.r.t. default curve)
 # Cooldown rate: 0.1 °C/hour (heat pump set -dT w.r.t. default curve)
+# Heat pump COP for +dT mode: 2.5
+# Heat pump COP for default curve mode: 3
 
 # Resulting storage object:
 building_thermal_mass = Storage(
@@ -248,20 +263,121 @@ building_thermal_mass = Storage(
     min_soc=0,                                      # Down to default weather compensation temperature
     max_charge_power=4000,                          # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 3 = 4000 W
     max_discharge_power=2000,                       # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W
-    charge_efficiency=3,                            # Heat pump COP
-    discharge_efficiency=1.0,                       # Assuming ideal efficiency for simplicity
+    charge_efficiency=2.5,                          # Heat pump COP for +dT mode
+    discharge_efficiency=3,                         # Heat pump COP for default mode
     passive_discharge_power=0,                      # Not relevant for building thermal mass
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # Not relevant for building thermal mass
     charging_window=[1, 1, ... 1, 1]                # Always connected and available
 )
 ```
-
 # Optimizer
-
 ## High Level Process
+
+The optimizer determines the optimal operating strategy for all controllable assets over a planning horizon. It takes as input the current states, constraints and forecasts of all assets. For each time step, the optimizer then determines:
+- The optimal power setpoints for each controllable asset (e.g., battery, EV, DHW, building thermal mass, controllable loads)
+
+These are the decision variables. Decision variables represent the quantities the optimizer is allowed to change in order to achieve the optimization objective.
+
+The optimizer solves the optimization problem using a Mixed Integer Linear Programming (MILP) solver via CBC and PuLP. This approach is more robust than continuous solvers for discrete battery/EV charging decisions.
+
+The power setpoints at t=0 can then be immediately applied to the assets, making sure that the physical devices follow the setpoints accurately. For continuous operation, this process is repeated at regular intervals to adapt to changing conditions and updated forecasts. This is known as a receding horizon or model predictive control approach. To give the actual commands to the assets, the optimizer's output must be translated into device-specific control signals. This is done through a control interface, e.g. Home Assistant.
 
 ## Optimization Objective
 
-## Outputs
+The optimizer basically optimizes for a minimum or maximum of a certain objective function. In our case this is a minimization of the total energy cost over the planning horizon. Typically the following objective function is used:
+
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
+
+
+But because of our way of implementing the building thermal mass this objective function is not yet complete.
+
+- When the building thermal mass is charged, extra energy is used and thus this is represented in the objective function with: Grid Import Energy x Import Price
+- When the building thermal mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no extra energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
+
+So by pre-charging the building thermal mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
+
+To capture this benefit in the objective function, an additional term is introduced: Thermal Storage Benefit.
+
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Thermal Storage Benefit}_{t})$$
+
+With the thermal storage benefit being:
+
+$$\text{Thermal Storage Benefit}_{t} = \text{Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{charge}}} \times \text{Import Price}_{t}$$
+
+where:
+
+- $\eta_{\mathrm{discharge}}$ is the thermal storage discharging efficiency, thermal to thermal conversion, which is 1.
+- $\eta_{\mathrm{charge}}$ is the thermal storage charging efficiency for the default weather compensation curve (defined by `discharge_efficiency` in the above class example), electrical to thermal conversion.
+
+This term represents the avoided electricity cost obtained by using previously stored thermal energy instead of producing the same heat at the current electricity price.
+
+## Constraints
+
+The objective function must be optimized while satisfying all constraints.
+
+### Energy Balance Constraint
+
+The most important system-level constraint is the energy balance constraint. This constraint ensures that energy is conserved at every timestep and that total power supply always equals total power demand.
+
+In mathematical terms:
+
+$$\sum \text{Source Power}=\sum \text{Load Power}+\sum \text{Storage Power}$$
+
+### Asset Constraints
+
+In addition to the system-level energy balance constraint, each asset contributes its own physical and operational constraints.
+
+Examples include:
+
+- Maximum charging power
+- Maximum discharging power
+- Energy capacity
+- Availability windows
+- State-of-charge limits
+
+For storage assets, the state of charge must evolve according to the storage dynamics:
+
+$$
+SOC_{t+1}
+=
+SOC_t
++
+\frac{
+\left(
+P_{\mathrm{charge},t}\eta_{\mathrm{charge}}
+-
+P_{\mathrm{discharge},t}
+-
+\frac{P_{\mathrm{demand},t}}{\eta_{\mathrm{discharge}}}
+-
+P_{\mathrm{loss},t}
+\right)\Delta t
+}
+{C}
+$$
+
+where:
+
+- $P_{\mathrm{charge}}$ represents charging power.
+- $P_{\mathrm{discharge}}$ represents controlled discharge power.
+- $P_{\mathrm{demand}}$ represents the forecasted useful energy demand served by the storage.
+- $\eta_{\mathrm{charge}}$ represents the charging efficiency.
+- $\eta_{\mathrm{discharge}}$ represents the discharging efficiency.
+- $P_{\mathrm{loss}}$ represents passive storage losses.
+- $C$ represents the storage capacity.
+
+This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
+
+### Soft Constraints
+
+Some constraints, like minimum and maximum state-of-charge limits, are implemented as soft constraints. Rather than making the optimization problem infeasible, violations are allowed but receive a large penalty cost in the objective function.
+
+This ensures the optimizer always returns the best achievable solution while strongly discouraging constraint violations.
+
+
+
+
+
+
 
