@@ -1,3 +1,8 @@
+To Do
+- Mutual exclusivity of charge and discharge for grid and storage
+- Mutual exclusivity of charging the DHW tank and the building thermal mass
+- PV curtailment: PV is a decision variable that allows reducing PV output when necessary
+
 # Contents
 
 - [Sign Convention](#sign-convention)
@@ -10,7 +15,7 @@
 - [Optimizer](#optimizer)
   - [High Level Process](#high-level-process)
   - [Optimization Objective](#optimization-objective)
-  - [Constraints](#constraints)
+  - [Optimizer Constraints](#optimizer-constraints)
 
 
 # Sign Convention
@@ -125,7 +130,7 @@ Typical examples:
 - Discharge to Electrical Network [-] *(yes/no, yes for electrical storage, no for thermal storage)*
 
 #### Forecasts (value per time step)
-- Energy Demand Forecast [Wh] *(typically DHW storage)*
+- Energy Demand Forecast [Wh] *(typically EV battery or DHW storage)*
 - Charging Window [-] *(1/0 for available/unavailable, typically EV)*
 
 ## Unified Storage Model
@@ -261,10 +266,10 @@ building_thermal_mass = Storage(
     energy_capacity=20000,                          # Thermal energy: 100 m² × 200 Wh/m²/°C × (21 - 20)°C = 20000 Wh
     max_soc=1,                                      # Up to max comfort temperature
     min_soc=0,                                      # Down to default weather compensation temperature
-    max_charge_power=4000,                          # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 3 = 4000 W
-    max_discharge_power=2000,                       # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W
+    max_charge_power=4800,                          # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
+    max_discharge_power=2000,                       # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
     charge_efficiency=2.5,                          # Heat pump COP for +dT mode
-    discharge_efficiency=3,                         # Heat pump COP for default mode
+    discharge_efficiency=3,                         # Heat pump COP for default mode, this is actually a charging efficiency, as the discharge efficiency is 1 and not used anyway, this attribute is used for the default charging efficiency  
     passive_discharge_power=0,                      # Not relevant for building thermal mass
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # Not relevant for building thermal mass
@@ -289,30 +294,65 @@ The optimizer basically optimizes for a minimum or maximum of a certain objectiv
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
 
-
+### Building Thermal Mass Discharge Benefit
 But because of our way of implementing the building thermal mass this objective function is not yet complete.
 
 - When the building thermal mass is charged, extra energy is used and thus this is represented in the objective function with: Grid Import Energy x Import Price
-- When the building thermal mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no extra energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
+- When the building thermal mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no electrical energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
 
 So by pre-charging the building thermal mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
+This is in contrast with the DHW thermal storage, where the energy demand forecast dictates how much the storage should be charged, the economic benefit is then defined in the objective function by minimizing Grid Import Energy x Import Price.
 
-To capture this benefit in the objective function, an additional term is introduced: Thermal Storage Benefit.
+To capture this benefit in the objective function, an additional term is introduced: Building Thermal Discharge Benefit (note that this term only applies to building thermal storage).
 
-$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Thermal Storage Benefit}_{t})$$
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t})$$
 
-With the thermal storage benefit being:
+With the building thermal discharge benefit being:
 
-$$\text{Thermal Storage Benefit}_{t} = \text{Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{charge}}} \times \text{Import Price}_{t}$$
+$$\text{Building Thermal Discharge Benefit}_{t} = \text{Building Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{charge}}} \times \text{Import Price}_{t}$$
 
 where:
 
-- $\eta_{\mathrm{discharge}}$ is the thermal storage discharging efficiency, thermal to thermal conversion, which is 1.
-- $\eta_{\mathrm{charge}}$ is the thermal storage charging efficiency for the default weather compensation curve (defined by `discharge_efficiency` in the above class example), electrical to thermal conversion.
+- $\eta_{\mathrm{discharge}}$ is the building thermal storage discharging efficiency, thermal to thermal conversion, which is 1.
+- $\eta_{\mathrm{charge}}$ is the building thermal storage charging efficiency for the default weather compensation curve (defined by `discharge_efficiency` in the above class example), electrical to thermal conversion.
 
 This term represents the avoided electricity cost obtained by using previously stored thermal energy instead of producing the same heat at the current electricity price.
 
-## Constraints
+### End-of-Horizon Value
+
+Because the optimization horizon is finite, energy remaining in storage at the end of the horizon may still have value beyond the optimization period.
+
+To prevent the optimizer from unnecessarily depleting storage assets near the end of the horizon, a terminal value can be assigned to the remaining stored energy. This rewards schedules that retain useful energy for future operation outside the optimization horizon.
+
+The objective function will then be:
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t}) - \text{Remaining Storage Value}_{T}$$
+
+With the remaining storage value being:
+
+$$\text{Remaining Storage Value}_{T} = \text{Remaining Stored Energy}_{T} \times \eta_{\mathrm{value}} \times \text{Future Import Price}$$
+
+With
+
+- $\text{Future Import Price}$ being the expected electricity import price beyond the optimization horizon. Defined as the average import price of the current horizon.
+- $\eta_{\mathrm{value}}$ being the amount of grid electricity [Wh] that one stored Wh is worth, which depends on the storage type:
+
+| Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
+|---|---|---|
+| Thermal (DHW tank, building thermal mass) | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the heat pump COP. |
+| Electrical (home battery, EV battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
+---
+### Secondary Objectives
+
+In some situations, multiple schedules result in the same total energy cost. For example, when electricity prices are identical over several timesteps, charging a battery now or later may lead to exactly the same objective value.
+
+To avoid arbitrary solutions, the optimizer applies secondary objectives as tie-breakers. Examples include:
+
+- Minimizing the maximum grid import/export power (peak leveling).
+- Preferring local storage charging over grid export.
+
+These objectives are assigned a much smaller weight than the main cost objective and therefore only influence the solution when multiple schedules have equivalent cost.
+
+## Optimizer Constraints
 
 The objective function must be optimized while satisfying all constraints.
 
@@ -323,6 +363,12 @@ The most important system-level constraint is the energy balance constraint. Thi
 In mathematical terms:
 
 $$\sum \text{Source Power}=\sum \text{Load Power}+\sum \text{Storage Power}$$
+
+**Reference point.** Storage charge and discharge are separate non-negative decision variables, each measured where the energy leaves its origin: $P_{\text{charge}}$ on the electrical side (the power drawn from the house) and $P_{\text{discharge}}$ on the storage side (the power drawn from the stored energy). The energy balance is on the electrical side, so the Storage Power in the balance is defined as:
+
+$${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\text{discharge}}$$
+
+For thermal storage (DHW tank, building thermal mass), discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance.
 
 ### Asset Constraints
 
@@ -338,34 +384,20 @@ Examples include:
 
 For storage assets, the state of charge must evolve according to the storage dynamics:
 
-$$
-SOC_{t+1}
-=
-SOC_t
-+
-\frac{
-\left(
-P_{\mathrm{charge},t}\eta_{\mathrm{charge}}
--
-P_{\mathrm{discharge},t}
--
-\frac{P_{\mathrm{demand},t}}{\eta_{\mathrm{discharge}}}
--
-P_{\mathrm{loss},t}
-\right)\Delta t
-}
-{C}
-$$
+$$SOC_{t+1}=
+SOC_t+
+\frac{\left(P_{\mathrm{charge},t}\eta_{\mathrm{charge}}-P_{\mathrm{discharge},t}-P_{\mathrm{loss},t}\right)\Delta t-\frac{E_{\mathrm{demand},t}}{\eta_{\mathrm{discharge}}}}{C}$$
 
 where:
 
-- $P_{\mathrm{charge}}$ represents charging power.
-- $P_{\mathrm{discharge}}$ represents controlled discharge power.
-- $P_{\mathrm{demand}}$ represents the forecasted useful energy demand served by the storage.
-- $\eta_{\mathrm{charge}}$ represents the charging efficiency.
-- $\eta_{\mathrm{discharge}}$ represents the discharging efficiency.
-- $P_{\mathrm{loss}}$ represents passive storage losses.
-- $C$ represents the storage capacity.
+- $P_{\mathrm{charge}}$ represents charging power [W].
+- $P_{\mathrm{discharge}}$ represents discharge power [W] which is controlled by the optimization algorithm.
+- $E_{\mathrm{demand}}$ represents the forecasted useful energy demand [Wh] per time step that must be supplied by the storage.
+- $\eta_{\mathrm{charge}}$ represents the charging efficiency [-].
+- $\eta_{\mathrm{discharge}}$ represents the discharging efficiency [-].
+- $P_{\mathrm{loss}}$ represents passive storage losses [W].
+- $C$ represents the storage capacity [Wh].
+- $\Delta t$ represents the time step duration [h].
 
 This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
 
