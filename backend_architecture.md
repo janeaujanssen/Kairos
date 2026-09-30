@@ -1,10 +1,11 @@
 # Backend Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-## To Do
-- Mutual exclusivity of charge and discharge for grid and storage
-- Mutual exclusivity of charging the DHW tank and the building thermal mass
-- PV curtailment: PV is a decision variable that allows reducing PV output when necessary
+> **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the unified storage model.
+> **To Do:**
+> - Mutual exclusivity of charge and discharge for grid and storage
+> - Mutual exclusivity of charging the DHW tank and the building thermal mass
+> - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
 
 # Contents
 

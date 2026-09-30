@@ -1,462 +1,97 @@
 # Home Assistant Integration Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-## Overview
+> **Status:** draft. This document builds on `backend_architecture.md` (sign convention, asset classes, conversion layer, optimizer). It describes how Kairos connects to Home Assistant (HA); it does not repeat the optimizer design.
 
-Kairos is split into two separate components:
+# Contents
 
-1. **Kairos (running as Docker Container or Home Assistant App)**
-2. **Kairos-ha-integration (Home Assistant Custom Integration)** 
+- [System Overview](#system-overview)
+  - [Goals and Non-Goals](#goals-and-non-goals)
+  - [Components](#components)
+  - [Control Cycle](#control-cycle)
+- [App API](#app-api)
 
 
-This separation keeps the optimization engine (Kairos) independent from Home Assistant while still providing a native Home Assistant user experience.
+# System Overview
+
+## Goals and Non-Goals
+
+**Goals**
+
+- Let a user select the HA entities that represent their energy system and describe their devices, with as little effort as possible.
+- Compute an optimized plan (power setpoints per controllable asset over the planning horizon) with the Kairos optimizer.
+- Expose that plan as HA entities.
+- Provide a dashboard in the App that shows the latest optimization results and their history.
+
+**Non-goals**
+
+- Kairos does **not** send commands to physical devices. How a setpoint is applied is the responsibility of the user, through their own automations.
+- The integration does not ship dashboards or cards. Entity selection relies on HA's native selectors, and result visualization is the job of the APP, while users can ofcourse build their own dashboard using the exposed entities of the integration via the `plan` attribute on entities.
+- Kairos does not depend on any cloud service.
+
+## Components
+
+Kairos consists of two parts. The **App** (GitHub repository `Kairos`) is the Kairos application that holds all logic. It is delivered as a Home Assistant add-on or as a standalone Docker container. The **integration** (GitHub repository `Kairos-ha-integration`) is the HA custom component that connects Home Assistant to the App.
+
+| | **App** (add-on or standalone Docker) | **Integration** (custom component, HACS) |
+|---|---|---|
+| Role | Core functionality and logic | Thin bridge between HA and the App |
+| Contains | Normalization, forecast parsing, conversion layer, MILP optimizer, setpoint generation, results dashboard, simulation data user interface | Entity configuration, API call, output entity exposure |
+| Knows about HA | Nothing (only entity IDs as opaque labels) | Everything HA-specific |
+| Knows about devices | All asset types and their parameters | Nothing, only "entity in, entity out" |
+
+The App image also contains a Streamlit **dashboard** with two parts: the **results dashboard**, which shows the latest optimization results, and the **simulation interface**, where scenario data can be entered to run the optimizer on non-real data. This lets users try Kairos and lets developers test the optimizer without Home Assistant or the integration. The dashboard runs as a second process next to the API and talks to it only through the API.
 
 ```mermaid
-flowchart LR
+flowchart TB
+    A["HA Entities: Device States & Forecasts"]
 
-    subgraph HA["Home Assistant"]
-        ENT["Entity States"]
-        INT["Kairos Integration"]
-        EMSENT["Kairos Entities"]
-
-        ENT --> INT
-        INT --> EMSENT
+    subgraph INT["kairos-ha-integration"]
+        B["Entity Selection & Parameter Configuration"]
+        C["API Client"]
+        D["Exposed Output Entities"]
     end
 
-    subgraph ADDON["Kairos Add-on"]
-        API["REST API"]
+    subgraph APP["Kairos (add-on or Docker)"]
+        API["API"]
+        Backend["App Backend: Optimization"]
 
-        CORE["Kairos Core<br/>Asset Model<br/>Forecasting<br/>Optimizer"]
+        subgraph UI["User Interface"]
+            Simulation["Simulation Data Interface"]
+            Dashboard["Results Dashboard"]
+        end
 
-        UI["Streamlit Dashboard"]
-
-        API <--> CORE
-        UI <--> CORE
+        API <--> UI
+        API <--> Backend
     end
 
-    INT -->|Optimization Request| API
-    API -->|Optimization Result| INT
+    E["HA Automations"]
+    F["Physical Device Control"]
 
-    EMSENT --> DASH["HA Dashboards"]
-    EMSENT --> AUTO["Automations"]
-    EMSENT --> HW["Hardware Control"]
+    A --> B
+    B --> C
 
-    USER["User"] --> UI
+    C <--> API
+
+    C --> D
+    E --> F
+    D --> E
+
+%% Subgraph styling only
+style INT stroke:#7c3aed,color:#7c3aed,stroke-width:2px
+style APP stroke:#16a34a,color:#16a34a,stroke-width:2px
+style UI stroke:#d97706,color:#d97706,stroke-width:2px
 ```
 
----
+## Control Cycle
 
-# Design Goals
+Each cycle (default every 15 minutes):
 
-The architecture is designed to:
+1. The integration reads all entities and forecast attributes.
+2. It sends them **unmodified** (plus per-entity hints such as unit and sign) to `POST /optimize`.
+3. The App normalizes the data, runs the conversion layer, solves the MILP, stores the full optimization record (inputs to API and outputs), and returns the optimization results.
+4. The integration updates the corresponding Home Assistant entities. Each setpoint entity exposes the value for the current optimization timestep as its state, while the complete optimization schedule is available through a plan attribute. As time advances, the entity state automatically moves to the next scheduled timestep without requiring a new optimization run.
+5. The user's automations react to the setpoint entities and control the devices.
+6. The next cycle observes the new states of the entities and forecasts. Because optimization is repeated continuously in a receding-horizon fashion, Kairos does not need confirmation that a previous setpoint was executed successfully. The measured state inherently reflects the effect of all previously applied control actions, and any deviation from the plan is corrected during the next optimization run
 
-- Keep the optimizer independent from Home Assistant.
-- Allow the optimizer to run as a standalone Docker application.
-- Allow deployment outside Home Assistant.
-- Minimize coupling to Home Assistant internals.
-- Allow unrestricted use of Python packages and solver dependencies.
-- Provide a native Home Assistant user experience.
-- Keep visualization and optimization logic together.
-- Allow Home Assistant to remain responsible for automation and hardware control.
-
----
-
-# Components
-
-## Home Assistant Integration
-
-The integration acts as the bridge between Home Assistant and Kairos.
-
-### Responsibilities
-
-- Read Home Assistant entity states.
-- Allow users to select entities during configuration.
-- Build optimization requests.
-- Call the Kairos Add-on API.
-- Receive optimization results.
-- Expose Kairos results as Home Assistant entities.
-- Provide Home Assistant device and entity registration.
-
-### Example Inputs
-
-```text
-sensor.battery_soc
-sensor.pv_power
-sensor.pv_forecast
-sensor.dynamic_energy_price
-sensor.indoor_temperature
-sensor.dhw_temperature
-sensor.ev_soc
-sensor.house_consumption
-```
-
-### Example Outputs
-
-```text
-sensor.ems_battery_power
-sensor.ems_ev_power
-sensor.ems_dhw_power
-sensor.ems_building_power
-
-sensor.ems_cost_forecast
-sensor.ems_energy_cost_today
-
-sensor.ems_status
-sensor.ems_solver_state
-```
-
----
-
-## Kairos Add-on
-
-The Kairos Add-on contains the actual Kairos application and optimization engine.
-
-### Responsibilities
-
-- Asset creation.
-- Forecast collection.
-- Optimization.
-- Schedule generation.
-- Historical data storage.
-- Visualization.
-
-### Internal Components
-
-```mermaid
-flowchart TD
-
-    API["REST API"]
-
-    FORECAST["Forecast Services"]
-
-    ASSET["Asset Builder"]
-
-    OPT["MILP Optimizer"]
-
-    STORE["Results Store"]
-
-    UI["Streamlit Dashboard"]
-
-    API --> ASSET
-    ASSET --> OPT
-    FORECAST --> OPT
-
-    OPT --> STORE
-
-    STORE --> UI
-    OPT --> UI
-```
-
----
-
-# Kairos Core
-
-The Kairos Core contains the reusable optimization engine.
-
-It should have no dependencies on Home Assistant.
-
-### Responsibilities
-
-#### Asset Modelling
-
-Examples:
-
-```text
-Grid
-PV
-Battery
-EV
-DHW Tank
-Building Thermal Mass
-```
-
-#### Forecast Handling
-
-Examples:
-
-```text
-Electricity prices
-PV forecast
-Consumption forecast
-Weather forecast
-```
-
-#### Optimization
-
-Input:
-
-```text
-Current Measurements
-Forecasts
-Constraints
-```
-
-Output:
-
-```text
-Optimal Power Schedules
-```
-
-#### Schedule Generation
-
-Examples:
-
-```text
-Battery charging schedule
-EV charging schedule
-DHW heating schedule
-Building pre-heating schedule
-```
-
----
-
-# Streamlit Dashboard
-
-The Streamlit dashboard provides the engineering and configuration interface.
-
-### Purpose
-
-The dashboard is intended for:
-
-- System configuration
-- Schedule visualization
-- Debugging
-- Analysis
-
-### Example Pages
-
-#### Overview
-
-```text
-Current Optimization Status
-Current Costs
-Current Asset States
-```
-
-#### Forecasts
-
-```text
-Price Forecast
-PV Forecast
-Load Forecast
-Weather Forecast
-```
-
-#### Asset States
-
-```text
-Battery SoC
-EV SoC
-DHW Temperature
-Building Temperature
-```
-
-#### Schedules
-
-```text
-Battery Power Schedule
-EV Charging Schedule
-DHW Heating Schedule
-Building Thermal Schedule
-```
-
-#### Cost Analysis
-
-```text
-Import Cost
-Export Revenue
-Thermal Storage Benefit
-Total Predicted Cost
-```
-
----
-
-# API Interface
-
-## Optimization Request
-
-```http
-POST /optimize
-```
-
-Example:
-
-```json
-{
-  "battery_soc": 0.65,
-  "battery_capacity": 13.5,
-  "pv_power": 2.4,
-  "price": 0.29,
-  "indoor_temp": 20.5
-}
-```
-
----
-
-## Optimization Response
-
-```json
-{
-  "status": "success",
-  "battery_power_kw": 3.5,
-  "ev_power_kw": 0.0,
-  "dhw_power_kw": 1.4,
-  "building_power_kw": 1.1,
-  "predicted_cost_eur": 2.31
-}
-```
-
----
-
-# Data Flow
-
-```mermaid
-sequenceDiagram
-
-    participant HA as Home Assistant
-    participant INT as Kairos Integration
-    participant EMS as Kairos Add-on
-    participant UI as Streamlit
-
-    HA->>INT: Entity states
-
-    INT->>EMS: Optimization request
-
-    EMS->>EMS: Build assets
-    EMS->>EMS: Generate forecasts
-    EMS->>EMS: Run optimizer
-
-    EMS-->>INT: Optimization result
-
-    INT-->>HA: Publish Kairos entities
-
-    UI->>EMS: Request schedules
-    EMS-->>UI: Optimization data
-```
-
----
-
-# Control Flow
-
-Kairos does not directly control hardware.
-
-Instead, it generates recommended setpoints.
-
-```mermaid
-flowchart LR
-
-    OPT["Optimizer"]
-
-    ENT["Kairos Entities"]
-
-    AUTO["HA Automations"]
-
-    DEV["Physical Devices"]
-
-    OPT --> ENT
-    ENT --> AUTO
-    AUTO --> DEV
-```
-
-Example:
-
-```text
-battery_power_kw = 3.5
-```
-
-becomes:
-
-```text
-sensor.ems_battery_power
-```
-
-A Home Assistant automation can then translate this into a battery-specific command.
-
----
-
-# Deployment Architecture
-
-## Development
-
-```text
-Docker Compose
- └─ Kairos Container
-```
-
-## Home Assistant
-
-```text
-Home Assistant
-├─ Kairos Integration
-└─ Kairos Add-on
-```
-
-## Future Platforms
-
-```text
-Home Assistant
-Docker Compose
-Proxmox
-OpenEMS
-Node-RED
-Cloud Services
-```
-
-All platforms can use the same Kairos Core.
-
----
-
-# Advantages
-
-## Home Assistant Integration
-
-Provides:
-
-- Native entities.
-- Config flows.
-- Automations.
-- Dashboard integration.
-- Device management.
-
-## Kairos Add-on
-
-Provides:
-
-- Fully isolated Python environment.
-- Independent dependency management.
-- CBC, PuLP, OR-Tools support.
-- Forecasting services.
-- Streamlit dashboard.
-- Independent release cycle.
-
-## Kairos Core
-
-Provides:
-
-- Reusable optimizer.
-- Platform independence.
-- Easier testing.
-- Simpler maintenance.
-- Reuse outside Home Assistant.
-
----
-
-# Summary
-
-Kairos consists of three logical layers:
-
-```text
-Kairos Integration
-    ↓
-Kairos Add-on
-    ↓
-Kairos Core
-```
-
-Where:
-
-- The **Integration** provides Home Assistant connectivity.
-- The **Add-on** provides the application runtime, API, and Streamlit user interface.
-- The **Core** provides forecasting, optimization, and scheduling logic.
-
-This architecture keeps the optimizer independent, scalable, and reusable while still providing a first-class Home Assistant experience.
+# App API
