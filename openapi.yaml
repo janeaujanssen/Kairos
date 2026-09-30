@@ -46,22 +46,47 @@ paths:
         '400':
           description: Invalid request payload.
 
+  /health:
+    get:
+      summary: Health Check
+      description: Returns the health status of the Kairos application. Use this to verify connectivity to the API and check if the service is operational.
+      operationId: getHealth
+      responses:
+        '200':
+          description: API is healthy and operational.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
 components:
   schemas:
     # --- UNIFIED STORAGE MODEL (Optimization Request) ---
     UnifiedOptimizationRequest:
       type: object
       required:
+        - timestamp
         - time_step_duration_hours
+        - horizon_hours
         - sources
         - loads
         - storage
       properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-30T14:00:05+02:00"
+          description: ISO 8601 timestamp marking the start of the optimization period.
         time_step_duration_hours:
           type: number
           format: float
           example: 0.25
           description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
+        horizon_hours:
+          type: number
+          format: float
+          example: 24
+          description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
         sources:
           type: array
           items:
@@ -241,16 +266,28 @@ components:
     OptimizationRequest:
       type: object
       required:
+        - timestamp
         - time_step_duration_hours
+        - horizon_hours
         - sources
         - loads
         - storage
       properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-30T14:00:05+02:00"
+          description: ISO 8601 timestamp marking the start of the optimization period.
         time_step_duration_hours:
           type: number
           format: float
           example: 0.25
           description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
+        horizon_hours:
+          type: number
+          format: float
+          example: 24
+          description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
         sources:
           type: array
           items:
@@ -605,3 +642,14 @@ components:
             home_battery: [2500.0, 2500.0, 0.0, -1500.0]
             ev_battery: [0.0, 7400.0, 7400.0, 0.0]
             building_thermal_mass: [4800.0, 0.0, -2000.0, 0.0]
+
+    # --- HEALTH RESPONSE ---
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: "healthy"
+          description: Health status of the application ("healthy" or "degraded").

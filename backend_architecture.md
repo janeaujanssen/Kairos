@@ -373,6 +373,8 @@ In mathematical terms:
 
 $$\sum \text{Source Power}=\sum \text{Load Power}+\sum \text{Storage Power}$$
 
+Note that the house load contains all devices in the home, thus the power of the other devices needs to be subtracted from the house load to avoid double counting.
+
 **Reference point.** Storage charge and discharge are separate non-negative decision variables, each measured where the energy leaves its origin: $P_{\text{charge}}$ on the electrical side (the power drawn from the house) and $P_{\text{discharge}}$ on the storage side (the power drawn from the stored energy). The energy balance is on the electrical side, so the Storage Power in the balance is defined as:
 
 $${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\text{discharge}}$$
