@@ -2,10 +2,10 @@
 
 ## Overview
 
-The EMS is split into two separate components:
+Kairos is split into two separate components:
 
 1. **Home Assistant Integration**
-2. **EMS Add-on**
+2. **Home Assistant App (formerly known as Add-on)**
 
 This separation keeps the optimization engine independent from Home Assistant while still providing a native Home Assistant user experience.
 
