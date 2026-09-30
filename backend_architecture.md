@@ -3,6 +3,7 @@
 
 > **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the unified storage model.
 > **To Do:**
+> - How is the discrete charge and discharge of the building thermal mass storage handled?
 > - Mutual exclusivity of charge and discharge for grid and storage
 > - Mutual exclusivity of charging the DHW tank and the building thermal mass
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
@@ -149,7 +150,7 @@ For a normal home battery, the conversion layer is straightforward as the physic
 # Physical input parameters:
 
 # Current SoC: 50%
-# Battery capacity: 10000 Wh
+# Energy capacity: 10000 Wh
 # Min SoC: 10%
 # Max SoC: 90%
 # Max charge power: 5000 W
@@ -183,7 +184,7 @@ For an EV battery, the conversion layer maps the physical parameters of the EV b
 # Physical input parameters:
 
 # Current SoC: 50%
-# Battery capacity: 60000 Wh
+# Energy capacity: 60000 Wh
 # Min SoC: 10%
 # Max SoC: 90%
 # Max charge power: 7400 W
@@ -209,7 +210,7 @@ ev_battery = Storage(
     discharge_efficiency=0.95,                      # One-way efficiency
     passive_discharge_power=0,                      # No passive discharge for battery
     discharge_to_electrical_network=True,           # Battery can discharge to the electrical network
-    energy_demand_forecast=[0, 20000, ... 0, 0],    # Set based on vehicle efficiency, round trip distance, and expected departure time
+    energy_demand_forecast=[0, 20000, ... 0, 0],    # (Wh) per time step. Set based on vehicle efficiency, round trip distance, and expected departure time
     charging_window=[1, 0, ... 0, 1]                # Set based on expected departure and arrival times
 )
 ```
@@ -228,6 +229,10 @@ The optimal charging of the DHW tank is driven by the energy demand forecast. Th
 # Heat loss coefficient: 4 W/°C (modern insulation)
 # Heat pump electric power: 3000 W
 # Heat pump COP: 3
+# Morning peak energy demand: 150 Wh
+# Evening peak energy demand: 180 Wh
+# Morning peak time: 7:00
+# Evening peak time: 19:00
 
 # Resulting storage object:
 dhw_tank = Storage(
@@ -242,7 +247,7 @@ dhw_tank = Storage(
     discharge_efficiency=1.0,                       # Assuming ideal efficiency for simplicity
     passive_discharge_power=160,                    # Heat loss at max temp: HLC × ΔT = 4 × (60-20) = 160 W
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
-    energy_demand_forecast=[150, 140, ... 180, 0],  # DHW demand forecast (Wh) per time step
+    energy_demand_forecast=[150, 140, ... 180, 0],  # (Wh) per time step. Set based on morning and evening peak energy demand and time.
     charging_window=[1, 1, ... 1, 1]                # Always connected and available
 )
 ```

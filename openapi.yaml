@@ -1,0 +1,607 @@
+openapi: 3.0.3
+info:
+  title: Kairos Energy Optimization API
+  description: Two-endpoint API for Kairos home energy scheduling optimization. Use `/optimize` with device-specific physical parameters or `/optimize-unified` with the unified storage model.
+  version: 1.0.0
+paths:
+  /optimize:
+    post:
+      summary: Run Energy Schedule Optimization (Physical Inputs)
+      description: Accepts device-specific physical parameters before conversion to the unified storage model. Supports multiple storage types (Home Battery, EV Battery, DHW Tank, Building Thermal Mass). The backend automatically converts these to the unified model and runs optimization.
+      operationId: runOptimization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OptimizationRequest'
+      responses:
+        '200':
+          description: Optimization completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OptimizationResponse'
+        '400':
+          description: Invalid request payload or conversion error.
+
+  /optimize-unified:
+    post:
+      summary: Run Energy Schedule Optimization (Unified Model)
+      description: Accepts current states, constraints, and forecasts using the unified storage model with generic asset classes (Sources, Loads, Storage). Recommended for integrated systems that have already converted physical parameters.
+      operationId: runOptimizationUnified
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnifiedOptimizationRequest'
+      responses:
+        '200':
+          description: Optimization completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OptimizationResponse'
+        '400':
+          description: Invalid request payload.
+
+components:
+  schemas:
+    # --- UNIFIED STORAGE MODEL (Optimization Request) ---
+    UnifiedOptimizationRequest:
+      type: object
+      required:
+        - time_step_duration_hours
+        - sources
+        - loads
+        - storage
+      properties:
+        time_step_duration_hours:
+          type: number
+          format: float
+          example: 0.25
+          description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+        loads:
+          type: array
+          items:
+            $ref: '#/components/schemas/Load'
+        storage:
+          type: array
+          items:
+            $ref: '#/components/schemas/Storage'
+
+    # --- SOURCES ---
+    Source:
+      type: object
+      required:
+        - id
+        - name
+        - current_power
+      properties:
+        id:
+          type: string
+          example: "grid_1"
+        name:
+          type: string
+          example: "Main Grid Connection"
+        current_power:
+          type: number
+          description: Current power in Watts (+ for supply/import, - for export).
+          example: 1200.0
+        max_import_power:
+          type: number
+          description: Max import power constraint [W] (Grid only).
+          example: 11000.0
+        max_export_power:
+          type: number
+          description: Max export power constraint [W] (Grid only).
+          example: 11000.0
+        power_forecast:
+          type: array
+          description: Power generation forecast [W] per time step (PV only).
+          items:
+            type: number
+        import_price_forecast:
+          type: array
+          description: Import price forecast [price/Wh] per time step (Grid only).
+          items:
+            type: number
+        export_price_forecast:
+          type: array
+          description: Export price forecast [price/Wh] per time step (Grid only).
+          items:
+            type: number
+
+    # --- LOADS ---
+    Load:
+      type: object
+      required:
+        - id
+        - name
+        - current_power
+        - controllable
+      properties:
+        id:
+          type: string
+          example: "load_household"
+        name:
+          type: string
+          example: "Household Base Load"
+        current_power:
+          type: number
+          description: Current consumption power in Watts (Always >= 0).
+          example: 450.0
+        controllable:
+          type: boolean
+          example: false
+        average_power:
+          type: number
+          description: Average power [W] (Controllable loads only).
+        energy_demand:
+          type: number
+          description: Total energy demand [Wh] (Controllable loads only).
+        earliest_start_time:
+          type: string
+          format: date-time
+          description: Earliest allowed start timestamp (Controllable loads only).
+        latest_finish_time:
+          type: string
+          format: date-time
+          description: Latest allowed finish timestamp (Controllable loads only).
+        power_forecast:
+          type: array
+          description: Uncontrollable power demand forecast [W] per time step.
+          items:
+            type: number
+
+    # --- UNIFIED STORAGE ---
+    Storage:
+      type: object
+      required:
+        - id
+        - name
+        - current_soc
+        - energy_capacity
+        - max_soc
+        - min_soc
+        - max_charge_power
+        - max_discharge_power
+        - charge_efficiency
+        - discharge_efficiency
+        - passive_discharge_power
+        - discharge_to_electrical_network
+      properties:
+        id:
+          type: string
+          example: "home_battery"
+        name:
+          type: string
+          example: "Home Battery"
+        current_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.5
+        energy_capacity:
+          type: number
+          description: Total capacity in Wh.
+          example: 10000.0
+        max_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.9
+        min_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.1
+        max_charge_power:
+          type: number
+          description: Max charging power [W].
+          example: 5000.0
+        max_discharge_power:
+          type: number
+          description: Max discharging power [W].
+          example: 5000.0
+        charge_efficiency:
+          type: number
+          description: One-way charging efficiency [-] (or COP for heat pump charging).
+          example: 0.95
+        discharge_efficiency:
+          type: number
+          description: One-way discharging efficiency [-] (or baseline COP for thermal storage).
+          example: 0.95
+        passive_discharge_power:
+          type: number
+          description: Passive standby losses [W].
+          example: 0.0
+        discharge_to_electrical_network:
+          type: boolean
+          description: True for electrical storage, False for thermal storage (DHW, Building Mass).
+          example: true
+        energy_demand_forecast:
+          type: array
+          description: Forecasted external energy demand [Wh] per time step (e.g. EV driving, DHW usage).
+          items:
+            type: number
+        charging_window:
+          type: array
+          description: Availability vector per time step (1 = available, 0 = unavailable).
+          items:
+            type: integer
+            enum: [0, 1]
+
+    # --- PHYSICAL INPUTS (Optimization Request) ---
+    OptimizationRequest:
+      type: object
+      required:
+        - time_step_duration_hours
+        - sources
+        - loads
+        - storage
+      properties:
+        time_step_duration_hours:
+          type: number
+          format: float
+          example: 0.25
+          description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+          description: Source assets (Grid, PV) - same format as unified model.
+        loads:
+          type: array
+          items:
+            $ref: '#/components/schemas/Load'
+          description: Load assets - same format as unified model.
+        storage:
+          type: array
+          description: Storage assets specified with device-specific physical parameters. Use oneOf to specify storage type.
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/HomeBattery'
+              - $ref: '#/components/schemas/EVBattery'
+              - $ref: '#/components/schemas/DHWTank'
+              - $ref: '#/components/schemas/BuildingThermalMass'
+            discriminator:
+              propertyName: storage_type
+
+    # --- PHYSICAL HOME BATTERY ---
+    HomeBattery:
+      type: object
+      required:
+        - id
+        - name
+        - storage_type
+        - current_soc
+        - energy_capacity
+        - min_soc
+        - max_soc
+        - max_charge_power
+        - max_discharge_power
+        - charge_efficiency
+        - discharge_efficiency
+      properties:
+        id:
+          type: string
+          example: "home_battery"
+        name:
+          type: string
+          example: "Home Battery"
+        storage_type:
+          type: string
+          enum: [home_battery]
+          example: "home_battery"
+        current_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.5
+          description: Current state of charge as fraction [0-1].
+        energy_capacity:
+          type: number
+          example: 10000.0
+          description: Total battery capacity [Wh].
+        min_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.1
+          description: Minimum state of charge for health protection [-].
+        max_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.9
+          description: Maximum state of charge for health protection [-].
+        max_charge_power:
+          type: number
+          example: 5000.0
+          description: Maximum charging power [W].
+        max_discharge_power:
+          type: number
+          example: 5000.0
+          description: Maximum discharging power [W].
+        charge_efficiency:
+          type: number
+          example: 0.95
+          description: One-way charging efficiency [-].
+        discharge_efficiency:
+          type: number
+          example: 0.95
+          description: One-way discharging efficiency [-].
+        passive_discharge_power:
+          type: number
+          example: 0.0
+          description: Passive standby losses [W].
+
+    # --- PHYSICAL EV BATTERY ---
+    EVBattery:
+      type: object
+      required:
+        - id
+        - name
+        - storage_type
+        - current_soc
+        - energy_capacity
+        - min_soc
+        - max_soc
+        - max_charge_power
+        - max_discharge_power
+        - charge_efficiency
+        - discharge_efficiency
+        - vehicle_efficiency
+        - round_trip_distance
+        - expected_departure_time
+        - expected_arrival_time
+      properties:
+        id:
+          type: string
+          example: "ev_battery"
+        name:
+          type: string
+          example: "EV Battery"
+        storage_type:
+          type: string
+          enum: [ev_battery]
+          example: "ev_battery"
+        current_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.5
+          description: Current state of charge as fraction [0-1].
+        energy_capacity:
+          type: number
+          example: 60000.0
+          description: Total battery capacity [Wh].
+        min_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.1
+          description: Minimum state of charge for health protection [-].
+        max_soc:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.9
+          description: Maximum state of charge for health protection [-].
+        max_charge_power:
+          type: number
+          example: 7400.0
+          description: Maximum charging power [W].
+        max_discharge_power:
+          type: number
+          example: 0.0
+          description: Maximum discharging power [W] (Vehicle to Grid capability).
+        charge_efficiency:
+          type: number
+          example: 0.95
+          description: One-way charging efficiency [-].
+        discharge_efficiency:
+          type: number
+          example: 0.95
+          description: One-way discharging efficiency [-].
+        passive_discharge_power:
+          type: number
+          example: 0.0
+          description: Passive standby losses [W].
+        vehicle_efficiency:
+          type: number
+          example: 0.005
+          description: Vehicle efficiency [km/Wh].
+        round_trip_distance:
+          type: number
+          example: 100.0
+          description: Expected round trip distance [km].
+        expected_departure_time:
+          type: string
+          format: date-time
+          example: "2024-01-01T09:00:00Z"
+          description: Expected vehicle departure time.
+        expected_arrival_time:
+          type: string
+          format: date-time
+          example: "2024-01-01T18:00:00Z"
+          description: Expected vehicle arrival time (next opportunity to charge).
+
+    # --- PHYSICAL DHW TANK ---
+    DHWTank:
+      type: object
+      required:
+        - id
+        - name
+        - storage_type
+        - tank_volume
+        - min_water_temperature
+        - max_water_temperature
+        - current_water_temperature
+        - min_comfort_temperature
+        - heat_loss_coefficient
+        - heat_pump_electric_power
+        - heat_pump_cop
+        - morning_peak_demand
+        - evening_peak_demand
+        - morning_peak_time
+        - evening_peak_time
+      properties:
+        id:
+          type: string
+          example: "dhw_tank"
+        name:
+          type: string
+          example: "DHW Tank"
+        storage_type:
+          type: string
+          enum: [dhw_tank]
+          example: "dhw_tank"
+        tank_volume:
+          type: number
+          example: 300.0
+          description: Tank volume [liters].
+        min_water_temperature:
+          type: number
+          example: 20.0
+          description: Minimum safe water temperature [°C].
+        max_water_temperature:
+          type: number
+          example: 60.0
+          description: Maximum safe water temperature [°C].
+        current_water_temperature:
+          type: number
+          example: 50.0
+          description: Current water temperature [°C].
+        min_comfort_temperature:
+          type: number
+          example: 40.0
+          description: Minimum comfort temperature for supply [°C].
+        heat_loss_coefficient:
+          type: number
+          example: 4.0
+          description: Heat loss coefficient [W/°C].
+        heat_pump_electric_power:
+          type: number
+          example: 3000.0
+          description: Heat pump electric power [W].
+        heat_pump_cop:
+          type: number
+          example: 3.0
+          description: Heat pump coefficient of performance (COP) [-].
+        morning_peak_demand:
+          type: number
+          example: 150.0
+          description: Typical morning peak DHW demand [Wh].
+        evening_peak_demand:
+          type: number
+          example: 180.0
+          description: Typical evening peak DHW demand [Wh].
+        morning_peak_time:
+          type: string
+          format: time
+          example: "07:00"
+          description: Time of morning peak demand [HH:MM].
+        evening_peak_time:
+          type: string
+          format: time
+          example: "19:00"
+          description: Time of evening peak demand [HH:MM].
+
+    # --- PHYSICAL BUILDING THERMAL MASS ---
+    BuildingThermalMass:
+      type: object
+      required:
+        - id
+        - name
+        - storage_type
+        - floor_area
+        - thermal_mass_coefficient
+        - default_weather_compensation_temperature
+        - current_indoor_temperature
+        - max_comfort_temperature
+        - heating_rate
+        - cooldown_rate
+        - heat_pump_cop_charge
+        - heat_pump_cop_default
+      properties:
+        id:
+          type: string
+          example: "building_thermal_mass"
+        name:
+          type: string
+          example: "Building Thermal Mass"
+        storage_type:
+          type: string
+          enum: [building_thermal_mass]
+          example: "building_thermal_mass"
+        floor_area:
+          type: number
+          example: 100.0
+          description: Building floor area [m²].
+        thermal_mass_coefficient:
+          type: number
+          example: 200.0
+          description: Thermal mass per unit area [Wh/m²/°C].
+        default_weather_compensation_temperature:
+          type: number
+          example: 20.0
+          description: Default weather compensation curve target temperature [°C].
+        current_indoor_temperature:
+          type: number
+          example: 20.5
+          description: Current indoor temperature [°C].
+        max_comfort_temperature:
+          type: number
+          example: 21.0
+          description: Maximum comfort temperature [°C].
+        heating_rate:
+          type: number
+          example: 0.6
+          description: Heating rate when heat pump set to +dT mode [°C/hour].
+        cooldown_rate:
+          type: number
+          example: 0.1
+          description: Cooldown rate when heat pump set to -dT mode [°C/hour].
+        heat_pump_cop_charge:
+          type: number
+          example: 2.5
+          description: Heat pump COP for charging (+dT mode) [-].
+        heat_pump_cop_default:
+          type: number
+          example: 3.0
+          description: Heat pump COP for default weather compensation mode [-].
+
+    # --- RESPONSE ---
+    OptimizationResponse:
+      type: object
+      required:
+        - status
+        - objective_cost
+        - schedule
+      properties:
+        status:
+          type: string
+          enum: [Optimal, Feasible, Infeasible]
+          example: "Optimal"
+        objective_cost:
+          type: number
+          description: Evaluated total objective cost over the planning horizon.
+          example: 1.24
+        schedule:
+          type: object
+          description: Dictionary mapping asset IDs to their scheduled power setpoints [W] for each time step.
+          additionalProperties:
+            type: array
+            items:
+              type: number
+          example:
+            home_battery: [2500.0, 2500.0, 0.0, -1500.0]
+            ev_battery: [0.0, 7400.0, 7400.0, 0.0]
+            building_thermal_mass: [4800.0, 0.0, -2000.0, 0.0]

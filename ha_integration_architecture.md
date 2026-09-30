@@ -87,11 +87,19 @@ style UI stroke:#d97706,color:#d97706,stroke-width:2px
 
 Each cycle (default every 15 minutes):
 
-1. The integration reads all entities and forecast attributes.
-2. It sends them **unmodified** (plus per-entity hints such as unit and sign) to `POST /optimize`.
-3. The App normalizes the data, runs the conversion layer, solves the MILP, stores the full optimization record (inputs to API and outputs), and returns the optimization results.
-4. The integration updates the corresponding Home Assistant entities. Each setpoint entity exposes the value for the current optimization timestep as its state, while the complete optimization schedule is available through a plan attribute. As time advances, the entity state automatically moves to the next scheduled timestep without requiring a new optimization run.
-5. The user's automations react to the setpoint entities and control the devices.
-6. The next cycle observes the new states of the entities and forecasts. Because optimization is repeated continuously in a receding-horizon fashion, Kairos does not need confirmation that a previous setpoint was executed successfully. The measured state inherently reflects the effect of all previously applied control actions, and any deviation from the plan is corrected during the next optimization run
+1. **Data collection**: The integration reads all entities and forecast attributes.
+2. **API request**: It sends them **unmodified** (plus per-entity hints such as unit and sign) to `POST /optimize`.
+3. **Optimization**: The App normalizes the data, runs the conversion layer, solves the MILP, stores the full optimization record (inputs to API and outputs), and returns the optimization results.
+4. **Entity Update**: The integration updates the corresponding Home Assistant entities. Each setpoint entity exposes the value for the current optimization timestep as its state, while the complete optimization schedule is available through a `plan` attribute. As time advances, the entity state automatically moves to the next scheduled timestep without requiring a new optimization run.
+5. **Device Control**:  The user's automations react to the setpoint entities and control the devices.
 
-# App API
+The next cycle observes the new states of the entities and forecasts. Because optimization is repeated continuously in a receding-horizon fashion, Kairos does not need confirmation that a previous setpoint was executed successfully. The measured state inherently reflects the effect of all previously applied control actions, and any deviation from the plan is corrected during the next optimization run
+
+# End-to-End Workflow
+## Configuration
+## Data Collection
+## API Request
+## Optimization
+## Optimization Response
+## Entity Updates
+## Device Control
