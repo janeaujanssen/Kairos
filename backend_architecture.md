@@ -1,4 +1,7 @@
-To Do
+# Backend Architecture for Kairos
+###  Easy, optimized energy scheduling for Home Assistant
+
+## To Do
 - Mutual exclusivity of charge and discharge for grid and storage
 - Mutual exclusivity of charging the DHW tank and the building thermal mass
 - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
@@ -37,7 +40,7 @@ $$\sum \text{Source Power} = \sum \text{Load Power} + \sum \text{Storage Power}$
 
 A typical residential energy system contains a mix of devices that produce, consume, and store energy.
 
-To allow the Energy Management System (EMS) to work independently of specific hardware, all physical devices are mapped onto three generic asset classes:
+To allow Kairos to work independently of specific hardware, all physical devices are mapped onto three generic asset classes:
 
 - Source
 - Load

@@ -1,30 +1,32 @@
-# Home Assistant EMS Architecture
+# Home Assistant Integration Architecture for Kairos
+###  Easy, optimized energy scheduling for Home Assistant
 
 ## Overview
 
 Kairos is split into two separate components:
 
-1. **Home Assistant Integration**
-2. **Home Assistant App (formerly known as Add-on)**
+1. **Kairos (running as Docker Container or Home Assistant App)**
+2. **Kairos-ha-integration (Home Assistant Custom Integration)** 
 
-This separation keeps the optimization engine independent from Home Assistant while still providing a native Home Assistant user experience.
+
+This separation keeps the optimization engine (Kairos) independent from Home Assistant while still providing a native Home Assistant user experience.
 
 ```mermaid
 flowchart LR
 
     subgraph HA["Home Assistant"]
         ENT["Entity States"]
-        INT["EMS Integration"]
-        EMSENT["EMS Entities"]
+        INT["Kairos Integration"]
+        EMSENT["Kairos Entities"]
 
         ENT --> INT
         INT --> EMSENT
     end
 
-    subgraph ADDON["EMS Add-on"]
+    subgraph ADDON["Kairos Add-on"]
         API["REST API"]
 
-        CORE["EMS Core<br/>Asset Model<br/>Forecasting<br/>Optimizer"]
+        CORE["Kairos Core<br/>Asset Model<br/>Forecasting<br/>Optimizer"]
 
         UI["Streamlit Dashboard"]
 
@@ -63,16 +65,16 @@ The architecture is designed to:
 
 ## Home Assistant Integration
 
-The integration acts as the bridge between Home Assistant and the EMS application.
+The integration acts as the bridge between Home Assistant and Kairos.
 
 ### Responsibilities
 
 - Read Home Assistant entity states.
 - Allow users to select entities during configuration.
 - Build optimization requests.
-- Call the EMS Add-on API.
+- Call the Kairos Add-on API.
 - Receive optimization results.
-- Expose EMS results as Home Assistant entities.
+- Expose Kairos results as Home Assistant entities.
 - Provide Home Assistant device and entity registration.
 
 ### Example Inputs
@@ -105,9 +107,9 @@ sensor.ems_solver_state
 
 ---
 
-## EMS Add-on
+## Kairos Add-on
 
-The EMS Add-on contains the actual EMS application and optimization engine.
+The Kairos Add-on contains the actual Kairos application and optimization engine.
 
 ### Responsibilities
 
@@ -147,9 +149,9 @@ flowchart TD
 
 ---
 
-# EMS Core
+# Kairos Core
 
-The EMS Core contains the reusable optimization engine.
+The Kairos Core contains the reusable optimization engine.
 
 It should have no dependencies on Home Assistant.
 
@@ -312,8 +314,8 @@ Example:
 sequenceDiagram
 
     participant HA as Home Assistant
-    participant INT as EMS Integration
-    participant EMS as EMS Add-on
+    participant INT as Kairos Integration
+    participant EMS as Kairos Add-on
     participant UI as Streamlit
 
     HA->>INT: Entity states
@@ -326,7 +328,7 @@ sequenceDiagram
 
     EMS-->>INT: Optimization result
 
-    INT-->>HA: Publish EMS entities
+    INT-->>HA: Publish Kairos entities
 
     UI->>EMS: Request schedules
     EMS-->>UI: Optimization data
@@ -336,7 +338,7 @@ sequenceDiagram
 
 # Control Flow
 
-The EMS does not directly control hardware.
+Kairos does not directly control hardware.
 
 Instead, it generates recommended setpoints.
 
@@ -345,7 +347,7 @@ flowchart LR
 
     OPT["Optimizer"]
 
-    ENT["EMS Entities"]
+    ENT["Kairos Entities"]
 
     AUTO["HA Automations"]
 
@@ -378,15 +380,15 @@ A Home Assistant automation can then translate this into a battery-specific comm
 
 ```text
 Docker Compose
- └─ EMS Container
+ └─ Kairos Container
 ```
 
 ## Home Assistant
 
 ```text
 Home Assistant
-├─ EMS Integration
-└─ EMS Add-on
+├─ Kairos Integration
+└─ Kairos Add-on
 ```
 
 ## Future Platforms
@@ -400,7 +402,7 @@ Node-RED
 Cloud Services
 ```
 
-All platforms can use the same EMS Core.
+All platforms can use the same Kairos Core.
 
 ---
 
@@ -416,7 +418,7 @@ Provides:
 - Dashboard integration.
 - Device management.
 
-## EMS Add-on
+## Kairos Add-on
 
 Provides:
 
@@ -427,7 +429,7 @@ Provides:
 - Streamlit dashboard.
 - Independent release cycle.
 
-## EMS Core
+## Kairos Core
 
 Provides:
 
@@ -441,14 +443,14 @@ Provides:
 
 # Summary
 
-The EMS consists of three logical layers:
+Kairos consists of three logical layers:
 
 ```text
-EMS Integration
+Kairos Integration
     ↓
-EMS Add-on
+Kairos Add-on
     ↓
-EMS Core
+Kairos Core
 ```
 
 Where:

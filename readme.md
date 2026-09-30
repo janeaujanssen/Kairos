@@ -1,5 +1,16 @@
 # Home EMS Optimizer
 
+<details>
+<summary>Home Battery</summary>
+
+This section contains the details of the home battery asset.
+
+- Capacity: 10 kWh
+- Max charge power: 5 kW
+- Max discharge power: 5 kW
+
+</details>
+
 A Streamlit app implementing the layered EMS architecture: an asset
 abstraction layer (Source/Storage/Load), a MILP optimizer core (PuLP + CBC),
 a Plotly visualization layer, and an optional side-by-side comparison
