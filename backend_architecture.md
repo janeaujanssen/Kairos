@@ -3,7 +3,7 @@
 
 > **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the unified storage model.
 > **To Do:**
-> - How is the discrete charge and discharge of the building thermal mass storage handled?
+> - How is the **discrete** charge and discharge of the building thermal mass storage handled?
 > - Mutual exclusivity of charge and discharge for grid and storage
 > - Mutual exclusivity of charging the DHW tank and the building thermal mass
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
@@ -88,7 +88,7 @@ Typical examples:
 
 Loads consume energy within the household. There are two types of loads:
 
-1. **Base Load**: The household's electrical consumption excluding every device modelled elsewhere in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). This is not controllable and is fixed at its forecast.
+1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
 2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
 
 Typical examples:
