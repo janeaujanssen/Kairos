@@ -7,6 +7,7 @@
 > - Mutual exclusivity of charge and discharge for grid and storage
 > - Mutual exclusivity of charging the DHW tank and the building thermal mass
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
+> - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
 
 # Contents
 
@@ -85,11 +86,14 @@ Typical examples:
 
 ## Loads
 
-Loads consume energy within the household.
+Loads consume energy within the household. There are two types of loads:
+
+1. **Base Load**: The household's electrical consumption excluding every device modelled elsewhere in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). This is not controllable and is fixed at its forecast.
+2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
 
 Typical examples:
 
-- Household electrical demand (total of all devices in home)
+- Base Load (residual household demand)
 - Controllable loads (e.g., washing machine, dishwasher, pool pump)
 
 ### Attributes
@@ -373,7 +377,7 @@ In mathematical terms:
 
 $$\sum \text{Source Power}=\sum \text{Load Power}+\sum \text{Storage Power}$$
 
-Note that the house load contains all devices in the home, thus the power of the other devices needs to be subtracted from the house load to avoid double counting.
+Note: The Base Load is defined as the residual of total household consumption after subtracting all explicitly modelled devices. This residual definition automatically avoids double counting in the energy balance.
 
 **Reference point.** Storage charge and discharge are separate non-negative decision variables, each measured where the energy leaves its origin: $P_{\text{charge}}$ on the electrical side (the power drawn from the house) and $P_{\text{discharge}}$ on the storage side (the power drawn from the stored energy). The energy balance is on the electrical side, so the Storage Power in the balance is defined as:
 

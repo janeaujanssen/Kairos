@@ -153,17 +153,18 @@ components:
       properties:
         id:
           type: string
-          example: "load_household"
+          example: "base_load_household"
         name:
           type: string
           example: "Household Base Load"
         current_power:
           type: number
-          description: Current consumption power in Watts (Always >= 0).
+          description: Current consumption power in Watts (Always >= 0). For base loads, measured as total house consumption minus all modelled devices.
           example: 450.0
         controllable:
           type: boolean
           example: false
+          description: False for base load (fixed at forecast), true for controllable loads.
         average_power:
           type: number
           description: Average power [W] (Controllable loads only).

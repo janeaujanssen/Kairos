@@ -154,7 +154,7 @@ Configuration happens once, in the integration's config flow, and is designed so
 |---|---|---|
 | **Grid** | Current power; import price (+ forecast attribute, required); export price (+ forecast attribute, required) | Max import power, max export power |
 | **PV** | Current power; forecast attribute (required) | none |
-| **Household load** | Current power; forecast attribute (required) | none |
+| **Base load** | Current power; forecast attribute (required) | none |
 | **Controllable load** | Current power (optional) | Average power, energy demand, earliest start, latest finish (each a constant or bound to a helper entity) |
 | **Home battery** | State of charge | Capacity, min/max SoC, max charge/discharge power, efficiencies, passive discharge |
 | **EV battery** | State of charge | As home battery, plus vehicle efficiency, round trip distance, departure and arrival time (fixed daily time or a datetime entity) |
@@ -163,11 +163,11 @@ Configuration happens once, in the integration's config flow, and is designed so
 
 Details of the selectors:
 
-- **Forecasts** use HA's `attribute` selector on the chosen entity, because forecast formats differ between integrations and live in entity attributes. If no forecast attribute is selected, the App holds the current value constant over the horizon. This is the intended behavior for fixed tariffs and is the baseline for a household load without a forecast. PV is the exception: it requires a forecast.
+- **Forecasts** use HA's `attribute` selector on the chosen entity, because forecast formats differ between integrations and live in entity attributes. If no forecast attribute is selected, the App holds the current value constant over the horizon. This is the intended behavior for fixed tariffs and is the baseline for a base load without a forecast. PV is the exception: it requires a forecast.
 - **Unit hints** are read automatically from each entity's `unit_of_measurement`. The user is never asked for units.
 - **Sign hint.** Grid power is the only entity with an ambiguous sign, so the flow asks once: "Positive means import" or "Positive means export".
 - **Validation.** The flow checks that each entity exists, that its unit matches the expected dimension (power, energy, percentage, temperature, price per energy), and that the forecast attribute is present and non-empty.
-- **Household load.** The selected entity is the total household load and includes all devices. 
+- **Base load.** The selected entity represents the household's electrical consumption excluding every device modelled elsewhere in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). This is the residual household demand derived from historical data with modelled devices already excluded. 
 - **Asset IDs.** Each subentry has a stable `id` (derived from its name at creation). It never changes afterwards, so history in the dashboard and the exposed entities stay consistent.
 
 A manual trigger is available as the action `kairos.run_optimization`, for testing or for running after a change of settings.
@@ -211,7 +211,7 @@ The integration builds one `POST /optimize` request from the snapshot. Shown bel
   ],
   "loads": [
     {
-      "id": "load_household",
+      "id": "base_load_household",
       "name": "Household Base Load",
       "current_power": 450,
       "controllable": false,
