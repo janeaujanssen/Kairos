@@ -3,12 +3,10 @@
 
 > **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the unified storage model.
 > **To Do:**
-> - How is the **discrete** charge and discharge of the building thermal mass storage handled?
-> - Mutual exclusivity of charge and discharge for grid and storage
-> - Mutual exclusivity of charging the DHW tank and the building thermal mass
-> - PV curtailment: PV is a decision variable that allows reducing PV output when necessary
-> - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
-
+> - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
+> - Not super happy with Building Thermal Mass implementation:
+>   - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
+>   - How is the **discrete** charge and discharge of the building thermal mass storage handled?
 # Contents
 
 - [Sign Convention](#sign-convention)
@@ -245,7 +243,7 @@ dhw_tank = Storage(
     energy_capacity=13960,                          # Thermal energy: 300L × 1.163 Wh/(L·K) × (60-20) = 13960 Wh
     max_soc=1,                                      # Up to max temperature    
     min_soc=0.5,                                    # Down to comfort temperature: (40-20) / (60-20) = 0.5
-    max_charge_power=3000,                          # Electric power: Heat pump electric power (W)
+    max_charge_power=3000,                          # Electric power: Heat pump electric power (W), this is not a max power value but a discretely defined power
     max_discharge_power=0,                          # No active discharge (passive loss only)
     charge_efficiency=3,                            # Heat pump COP
     discharge_efficiency=1.0,                       # Assuming ideal efficiency for simplicity
@@ -346,7 +344,7 @@ $$\text{Remaining Storage Value}_{T} = \text{Remaining Stored Energy}_{T} \times
 
 With
 
-- $\text{Future Import Price}$ being the expected electricity import price beyond the optimization horizon. Defined as the average import price of the current horizon.
+- $\text{Future Import Price}$ being the expected electricity import price beyond the optimization horizon, calculated as the average price from the available price forecast.
 - $\eta_{\mathrm{value}}$ being the amount of grid electricity [Wh] that one stored Wh is worth, which depends on the storage type:
 
 | Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
@@ -415,6 +413,31 @@ where:
 - $\Delta t$ represents the time step duration [h].
 
 This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
+
+### Mutual Exclusivity of Charge and Discharge for Storage
+
+Storage assets cannot simultaneously charge and discharge, enforced via binary variable $b_t \in \{0, 1\}$:
+
+$$P_{\text{charge},t} \leq M \cdot b_t, \quad P_{\text{discharge},t} \leq M \cdot (1 - b_t)$$
+
+where $M$ is the maximum power rating. This reflects the physical constraint of single-direction power converters.
+
+**Exceptions**:
+- Energy demand forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
+
+- Passive discharge (losses): Passive discharge is always allowed simultaneously with charging or discharging.
+
+### Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass
+
+DHW tank and building thermal mass share a single heat pump and cannot both charge simultaneously. Binary variables $z_{\text{DHW},t}$ and $z_{\text{BTM},t}$ enforce:
+
+$$z_{\text{DHW},t} + z_{\text{BTM},t} \leq 1$$
+
+with charging power limited by:
+
+$$P_{\text{charge,DHW},t} \leq M_{\text{DHW}} \cdot z_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} \leq M_{\text{BTM}} \cdot z_{\text{BTM},t}$$
+
+This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW and building thermal mass make sure that additional priority is given to the one that has SoC below minimum. When both DHW and building thermal mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
 
 ### Soft Constraints
 
