@@ -1,7 +1,7 @@
 # Backend Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the unified storage model.
+> **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
 > - Not super happy with Building Thermal Mass implementation:
@@ -15,7 +15,7 @@
   - [Sources](#sources)
   - [Loads](#loads)
   - [Storage](#storage)
-  - [Unified Storage Model](#unified-storage-model)
+  - [Storage Classes](#storage-classes)
 - [Optimizer](#optimizer)
   - [High Level Process](#high-level-process)
   - [Optimization Objective](#optimization-objective)
@@ -122,31 +122,42 @@ Typical examples:
 
 ### Attributes
 
-#### State
+Every storage asset shares a set of general attributes. Attributes that depend on the storage type are defined per storage class (see [Storage Classes](#storage-classes)).
+
+#### General attributes
+
+##### State
 - Current State of Charge [-] (SoC)
 
-#### Constraints
+##### Constraints
 - Energy Capacity [Wh]
 - Max SoC [-]
 - Min SoC [-]
-- Max Charge Power [W]
-- Max Discharge Power [W]
 - Charge Efficiency [-]
 - Discharge Efficiency [-]
 - Passive Discharge Power [W] *(typically DHW storage)*
 - Discharge to Electrical Network [-] *(yes/no, yes for electrical storage, no for thermal storage)*
 
-#### Forecasts (value per time step)
+##### Forecasts (value per time step)
 - Energy Demand Forecast [Wh] *(typically EV battery or DHW storage)*
-- Charging Window [-] *(1/0 for available/unavailable, typically EV)*
+- Availability Window [-] *(1/0 for available/unavailable, typically EV)*
 
-## Unified Storage Model
+#### Class specific attributes
 
-The storage class aims to provide a unified representation for all types of storage assets, allowing the optimizer to handle them in a consistent manner regardless of their physical implementation.
-The attributes of the storage class might make sense for a normal battery, but maybe a bit less for thermal storage like DHW tanks or building thermal mass. Therefore, a conversion layer is required to map the physical input characteristics of thermal storage to the unified storage class attributes.
+| Storage class | Class specific attributes |
+|---|---|
+| `Battery` (home battery, EV battery) | Max Charge Power [W], Max Discharge Power [W] |
+| `DHW` (DHW tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
+| `BTM` (building thermal mass) | Charge Power [W] *(discrete, electric power in +dT mode)*, Discharge Power [W] *(discrete, thermal power in -dT mode)*, Default Efficiency [-] *(heat pump COP in default curve mode)* |
+
+## Storage Classes
+
+The storage classes provide a representation for all types of storage assets, allowing the optimizer to handle them in a consistent manner regardless of their physical implementation.
+All classes share the general storage attributes. Each class adds the attributes that are specific to its physical behaviour.
+The attributes might make sense for a normal battery, but less for thermal storage like DHW tanks or building thermal mass. Therefore, a conversion layer is required to map the physical input characteristics of each storage type to the class attributes.
 
 ### Conversion Layer for Home Battery
-For a normal home battery, the conversion layer is straightforward as the physical parameters directly map to the unified storage model attributes.
+For a normal home battery, the conversion layer is straightforward as the physical parameters directly map to the `Battery` class attributes.
 
 ```python
 # Physical input parameters:
@@ -162,25 +173,28 @@ For a normal home battery, the conversion layer is straightforward as the physic
 # Passive discharge power: 0 W (no passive discharge for the battery)
 
 # Resulting storage object:
-home_battery = Storage(
+home_battery = Battery(
+    # General storage attributes
     name="Home Battery",
     current_soc=0.5,                                # 50%
     energy_capacity=10000,                          # 10000 Wh
     max_soc=0.9,                                    # Health protection: 90% maximum
     min_soc=0.1,                                    # Health protection: 10% minimum
-    max_charge_power=5000,                          # Charger limit
-    max_discharge_power=5000,                       # Discharger limit
     charge_efficiency=0.95,                         # One-way efficiency
     discharge_efficiency=0.95,                      # One-way efficiency
     passive_discharge_power=0,                      # No passive discharge for battery
     discharge_to_electrical_network=True,           # Battery can discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # No specific energy demand forecast for the battery
-    charging_window=[1, 1, ... 1, 1],               # Always connected and available
+    availability_window=[1, 1, ... 1, 1],           # Always connected and available
+
+    # Class specific attributes
+    max_charge_power=5000,                          # Charger limit
+    max_discharge_power=5000,                       # Discharger limit
 )
 ```
 
 ### Conversion Layer for EV Battery
-For an EV battery, the conversion layer maps the physical parameters of the EV battery to the unified storage model attributes. The main difference compared to a home battery is that it has additional physical input parameters to define the energy demand forecast and the charging window.
+For an EV battery, the conversion layer maps the physical parameters of the EV battery to the `Battery` class attributes. The main difference compared to a home battery is that it has additional physical input parameters to define the energy demand forecast and the availability window.
 
 ```python
 # Physical input parameters:
@@ -200,20 +214,23 @@ For an EV battery, the conversion layer maps the physical parameters of the EV b
 # Expected arrival time: 18:00 h
 
 # Resulting storage object:
-ev_battery = Storage(
+ev_battery = Battery(
+    # General storage attributes
     name="EV Battery",
     current_soc=0.5,                                # 50%
     energy_capacity=60000,                          # 60000 Wh
     max_soc=0.9,                                    # Health protection: 90% maximum
     min_soc=0.1,                                    # Health protection: 10% minimum
-    max_charge_power=7400,                          # Charger limit
-    max_discharge_power=0,                          # Vehicle to grid capability
     charge_efficiency=0.95,                         # One-way efficiency
     discharge_efficiency=0.95,                      # One-way efficiency
     passive_discharge_power=0,                      # No passive discharge for battery
     discharge_to_electrical_network=True,           # Battery can discharge to the electrical network
     energy_demand_forecast=[0, 20000, ... 0, 0],    # (Wh) per time step. Set based on vehicle efficiency, round trip distance, and expected departure time
-    charging_window=[1, 0, ... 0, 1]                # Set based on expected departure and arrival times
+    availability_window=[1, 0, ... 0, 1],           # Set based on expected departure and arrival times
+
+    # Class specific attributes
+    max_charge_power=7400,                          # Charger limit
+    max_discharge_power=0,                          # Vehicle to grid capability
 )
 ```
 
@@ -237,20 +254,22 @@ The optimal charging of the DHW tank is driven by the energy demand forecast. Th
 # Evening peak time: 19:00
 
 # Resulting storage object:
-dhw_tank = Storage(
+dhw_tank = DHW(
+    # General storage attributes
     name="DHW Tank",
     current_soc=0.75,                               # (50-20) / (60-20) = 0.75
     energy_capacity=13960,                          # Thermal energy: 300L × 1.163 Wh/(L·K) × (60-20) = 13960 Wh
     max_soc=1,                                      # Up to max temperature    
     min_soc=0.5,                                    # Down to comfort temperature: (40-20) / (60-20) = 0.5
-    max_charge_power=3000,                          # Electric power: Heat pump electric power (W), this is not a max power value but a discretely defined power
-    max_discharge_power=0,                          # No active discharge (passive loss only)
     charge_efficiency=3,                            # Heat pump COP
     discharge_efficiency=1.0,                       # Assuming ideal efficiency for simplicity
     passive_discharge_power=160,                    # Heat loss at max temp: HLC × ΔT = 4 × (60-20) = 160 W
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[150, 140, ... 180, 0],  # (Wh) per time step. Set based on morning and evening peak energy demand and time.
-    charging_window=[1, 1, ... 1, 1]                # Always connected and available
+    availability_window=[1, 1, ... 1, 1],           # Always connected and available
+
+    # Class specific attributes
+    charge_power=3000,                              # Electric power: Heat pump electric power (W), this is not a max power value but a discretely defined power
 )
 ```
 
@@ -271,20 +290,24 @@ As a simple approach to controlling the building thermal mass using a heat pump,
 # Heat pump COP for default curve mode: 3
 
 # Resulting storage object:
-building_thermal_mass = Storage(
+building_thermal_mass = BTM(
+    # General storage attributes
     name="Building Thermal Mass",
     current_soc=0.5,                                # (20.5 - 20) / (21 - 20) = 0.5
     energy_capacity=20000,                          # Thermal energy: 100 m² × 200 Wh/m²/°C × (21 - 20)°C = 20000 Wh
     max_soc=1,                                      # Up to max comfort temperature
     min_soc=0,                                      # Down to default weather compensation temperature
-    max_charge_power=4800,                          # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
-    max_discharge_power=2000,                       # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
     charge_efficiency=2.5,                          # Heat pump COP for +dT mode
-    discharge_efficiency=3,                         # Heat pump COP for default mode, this is actually a charging efficiency, as the discharge efficiency is 1 and not used anyway, this attribute is used for the default charging efficiency  
+    discharge_efficiency=1,                         # Assuming ideal efficiency for simplicity
     passive_discharge_power=0,                      # Not relevant for building thermal mass
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # Not relevant for building thermal mass
-    charging_window=[1, 1, ... 1, 1]                # Always connected and available
+    availability_window=[1, 1, ... 1, 1],           # Always connected and available
+
+    # Class specific attributes
+    charge_power=4800,                              # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
+    discharge_power=2000,                           # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
+    default_efficiency=3,                           # Heat pump COP for default curve mode
 )
 ```
 # Optimizer
@@ -308,7 +331,7 @@ $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Impor
 ### Building Thermal Mass Discharge Benefit
 But because of our way of implementing the building thermal mass this objective function is not yet complete.
 
-- When the building thermal mass is charged, extra energy is used and thus this is represented in the objective function with: Grid Import Energy x Import Price
+- When the building thermal mass is charged, extra energy is used, and this is represented in the objective function with: Grid Import Energy x Import Price
 - When the building thermal mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no electrical energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
 
 So by pre-charging the building thermal mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
@@ -320,12 +343,12 @@ $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Impor
 
 With the building thermal discharge benefit being:
 
-$$\text{Building Thermal Discharge Benefit}_{t} = \text{Building Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{charge}}} \times \text{Import Price}_{t}$$
+$$\text{Building Thermal Discharge Benefit}_{t} = \text{Building Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{default}}} \times \text{Import Price}_{t}$$
 
 where:
 
-- $\eta_{\mathrm{discharge}}$ is the building thermal storage discharging efficiency, thermal to thermal conversion, which is 1.
-- $\eta_{\mathrm{charge}}$ is the building thermal storage charging efficiency for the default weather compensation curve (defined by `discharge_efficiency` in the above class example), electrical to thermal conversion.
+- $\eta_{\mathrm{discharge}}$ is the building thermal storage discharging efficiency (`discharge_efficiency`), thermal to thermal conversion, which is 1.
+- $\eta_{\mathrm{default}}$ is the heat pump COP during operation in default weather compensation curve mode (`default_efficiency` of the `BTM` class), electrical to thermal conversion.
 
 This term represents the avoided electricity cost obtained by using previously stored thermal energy instead of producing the same heat at the current electricity price.
 
@@ -349,7 +372,8 @@ With
 
 | Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
 |---|---|---|
-| Thermal (DHW tank, building thermal mass) | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the heat pump COP. |
+| Thermal, DHW tank | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the COP (`charge_efficiency` of the `DHW` class). |
+| Thermal, building thermal mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `default_efficiency` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
 | Electrical (home battery, EV battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
 ---
 ### Secondary Objectives
@@ -389,10 +413,10 @@ In addition to the system-level energy balance constraint, each asset contribute
 
 Examples include:
 
-- Maximum charging power
-- Maximum discharging power
+- Maximum or discrete charging power
+- Maximum or discrete discharging power
 - Energy capacity
-- Availability windows
+- Availability windows (charging and discharging are only allowed when the availability window is 1)
 - State-of-charge limits
 
 For storage assets, the state of charge must evolve according to the storage dynamics:
@@ -416,11 +440,19 @@ This ensures that energy stored in an asset remains physically consistent over t
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
 
-Storage assets cannot simultaneously charge and discharge, enforced via binary variable $b_t \in \{0, 1\}$:
+Storage assets cannot simultaneously charge and discharge, enforced via binary variables $z_t, y_t \in \{0, 1\}$ for charging and discharging respectively, with $z_t + y_t \leq 1$. When both are 0 the storage is idle.
 
-$$P_{\text{charge},t} \leq M \cdot b_t, \quad P_{\text{discharge},t} \leq M \cdot (1 - b_t)$$
+For a `Battery`, the power is continuous:
 
-where $M$ is the maximum power rating. This reflects the physical constraint of single-direction power converters.
+$$P_{\text{charge},t} \leq P_{\text{charge}}^{\max} \cdot z_t, \quad P_{\text{discharge},t} \leq P_{\text{discharge}}^{\max} \cdot y_t, \quad z_t + y_t \leq 1$$
+
+where $P_{\text{charge}}^{\max}$ and $P_{\text{discharge}}^{\max}$ are `max_charge_power` and `max_discharge_power`. This reflects the physical constraint of single-direction power converters.
+
+For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode). With binary $z_{\text{BTM},t}$ for +dT mode (see below) and binary $y_{\text{BTM},t}$ for -dT mode:
+
+$$P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot z_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot y_{\text{BTM},t}, \quad z_{\text{BTM},t} + y_{\text{BTM},t} \leq 1$$
+
+where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` and `discharge_power`. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
 **Exceptions**:
 - Energy demand forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
@@ -429,13 +461,15 @@ where $M$ is the maximum power rating. This reflects the physical constraint of 
 
 ### Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass
 
-DHW tank and building thermal mass share a single heat pump and cannot both charge simultaneously. Binary variables $z_{\text{DHW},t}$ and $z_{\text{BTM},t}$ enforce:
+DHW tank and building thermal mass typically share a single heat pump and cannot both charge simultaneously. Binary variables $z_{\text{DHW},t}$ and $z_{\text{BTM},t}$ enforce:
 
 $$z_{\text{DHW},t} + z_{\text{BTM},t} \leq 1$$
 
-with charging power limited by:
+with the discrete charging power defined by:
 
-$$P_{\text{charge,DHW},t} \leq M_{\text{DHW}} \cdot z_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} \leq M_{\text{BTM}} \cdot z_{\text{BTM},t}$$
+$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot z_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot z_{\text{BTM},t}$$
+
+where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes.
 
 This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW and building thermal mass make sure that additional priority is given to the one that has SoC below minimum. When both DHW and building thermal mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
 
