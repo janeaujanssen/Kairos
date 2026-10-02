@@ -6,7 +6,6 @@
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
 > - Not super happy with Building Thermal Mass implementation:
 >   - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
->   - How is the **discrete** charge and discharge of the building thermal mass storage handled?
 # Contents
 
 - [Sign Convention](#sign-convention)
@@ -20,6 +19,7 @@
   - [High Level Process](#high-level-process)
   - [Optimization Objective](#optimization-objective)
   - [Optimizer Constraints](#optimizer-constraints)
+  - [Optimizer Output](#optimizer-output)
 
 
 # Sign Convention
@@ -70,17 +70,19 @@ Typical examples:
 
 ### Attributes
 
-#### State
+Every source shares a general attribute. Attributes that depend on the source type are defined per source class.
+
+#### General attributes
+
+##### State
 - Current Power [W]
 
-#### Constraints
-- Max Import Power [W] *(Grid only)*
-- Max Export Power [W] *(Grid only)*
+#### Class specific attributes
 
-#### Forecasts (value per time step)
-- Power Forecast [W] *(PV only)*
-- Import Price Forecast [price/Wh] *(Grid only)*
-- Export Price Forecast [price/Wh] *(Grid only)*
+| Source class | Class specific attributes |
+|---|---|
+| `Grid` | Max Import Power [W]<br>Max Export Power [W]<br>Import Price Forecast [price/Wh per time step]<br>Export Price Forecast [price/Wh per time step] |
+| `PV` | Power Forecast [W per time step] |
 
 ## Loads
 
@@ -96,18 +98,22 @@ Typical examples:
 
 ### Attributes
 
-#### State
+Every load shares a set of general attributes. Attributes that depend on the load type are defined per load class.
+
+#### General attributes
+
+##### State
 - Current Power [W]
 
-#### Constraints
-- Controllable [-] *(yes/no)*
-- Average Power [W] *(controllable loads only)*
-- Energy Demand [Wh] *(controllable loads only)*
-- Earliest Start Time [timestamp] *(controllable loads only)*
-- Latest Finish Time [timestamp] *(controllable loads only)*
+##### Constraints
+- Controllable [-] *(yes/no, fixed per class: no for `BaseLoad`, yes for `ControllableLoad`)*
 
-#### Forecasts (value per time step)
-- Power Forecast [W] *(household demand only)*
+#### Class specific attributes
+
+| Load class | Class specific attributes |
+|---|---|
+| `BaseLoad` (household demand) | Power Forecast [W per time step] |
+| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
 
 ## Storage
 
@@ -146,9 +152,9 @@ Every storage asset shares a set of general attributes. Attributes that depend o
 
 | Storage class | Class specific attributes |
 |---|---|
-| `Battery` (home battery, EV battery) | Max Charge Power [W], Max Discharge Power [W] |
+| `Battery` (home battery, EV battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
 | `DHW` (DHW tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
-| `BTM` (building thermal mass) | Charge Power [W] *(discrete, electric power in +dT mode)*, Discharge Power [W] *(discrete, thermal power in -dT mode)*, Default Efficiency [-] *(heat pump COP in default curve mode)* |
+| `BTM` (building thermal mass) | Charge Power [W] *(discrete, electric power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>Default Efficiency [-] *(heat pump COP in default curve mode)* |
 
 ## Storage Classes
 
@@ -478,6 +484,57 @@ This models the shared heat pump resource bottleneck and forces the optimizer to
 Some constraints, like minimum and maximum state-of-charge limits, are implemented as soft constraints. Rather than making the optimization problem infeasible, violations are allowed but receive a large penalty cost in the objective function.
 
 This ensures the optimizer always returns the best achievable solution while strongly discouraging constraint violations.
+
+## Optimizer Output
+
+The optimizer returns the optimization result containing the following information:
+
+### Status
+The solver status indicating whether an optimal solution was found:
+- **Optimal**: A globally optimal solution was found.
+- **Feasible**: A feasible solution was found, but optimality was not proven (e.g., time limit reached).
+- **Infeasible**: No feasible solution exists for the given constraints.
+
+### Objective Cost
+The total cost of the optimal or best-found schedule [price units], representing:
+
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t}) - \text{Remaining Storage Value}_{T}$$
+
+### Power Schedule
+A dictionary mapping each asset ID to its optimal power setpoint for each time step [W]. This includes:
+- **Grid**: Net grid power at each time step. Positive values indicate import, negative values indicate export.
+- **Controllable loads**: Scheduled power consumption (typically 0 or the average load power during operation window).
+- **Storage assets** (batteries, DHW, building thermal mass): Scheduled electrical power at each time step. Positive values indicate charging, negative values indicate discharging.
+
+Example:
+```json
+{
+  "grid_1": [1200.0, 3900.0, 7400.0, -300.0],
+  "home_battery": [2500.0, 2500.0, 0.0, -1500.0],
+  "ev_battery": [0.0, 7400.0, 7400.0, 0.0],
+  "dishwasher": [1500.0, 1500.0, 0.0, 0.0]
+}
+```
+
+### Storage State of Charge (SoC)
+A dictionary mapping each storage asset ID to its State of Charge at the end of each time step [-]. SoC values range from 0.0 (empty) to 1.0 (fully charged), representing the normalized energy stored relative to the asset's energy capacity.
+
+Mathematically, for each storage asset $s$ at each time step $t$:
+
+$$\text{SoC}_{s,t} = \frac{\text{Energy}_{s,t}}{C_s}$$
+
+where:
+- $\text{Energy}_{s,t}$ is the stored energy [Wh] at the end of time step $t$.
+- $C_s$ is the energy capacity [Wh] of storage asset $s$.
+
+Example:
+```json
+{
+  "home_battery": [0.50, 0.65, 0.65, 0.45],
+  "ev_battery": [0.80, 1.00, 1.00, 0.95],
+  "dhw_tank": [0.60, 0.60, 0.50, 0.50]
+}
+```
 
 
 

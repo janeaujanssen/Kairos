@@ -68,8 +68,8 @@ components:
         - timestamp
         - time_step_duration_hours
         - horizon_hours
-        - sources
-        - loads
+        - grid
+        - base_load
         - storage
       properties:
         timestamp:
@@ -87,16 +87,20 @@ components:
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
-        sources:
+        grid:
+          $ref: '#/components/schemas/Grid'
+        pv:
           type: array
           items:
-            $ref: '#/components/schemas/Source'
-          description: Source assets (Grid, PV) - same format as generic model.
-        loads:
+            $ref: '#/components/schemas/PV'
+          description: PV systems (optional).
+        base_load:
+          $ref: '#/components/schemas/BaseLoad'
+        controllable_loads:
           type: array
           items:
-            $ref: '#/components/schemas/Load'
-          description: Load assets - same format as generic model.
+            $ref: '#/components/schemas/ControllableLoad'
+          description: Schedulable appliances (optional).
         storage:
           type: array
           description: Storage assets specified with device-specific physical parameters.
@@ -110,12 +114,16 @@ components:
               propertyName: storage_type
 
     # --- SOURCES ---
-    Source:
+    Grid:
       type: object
       required:
         - id
         - name
         - current_power
+        - max_import_power
+        - max_export_power
+        - import_price_forecast
+        - export_price_forecast
       properties:
         id:
           type: string
@@ -125,40 +133,59 @@ components:
           example: "Main Grid Connection"
         current_power:
           type: number
-          description: Current power in Watts (+ for supply/import, - for export).
+          description: Current power in Watts (+ for import, - for export).
           example: 1200.0
         max_import_power:
           type: number
-          description: Max import power constraint [W] (Grid only).
+          description: Max import power constraint [W].
           example: 11000.0
         max_export_power:
           type: number
-          description: Max export power constraint [W] (Grid only).
+          description: Max export power constraint [W].
           example: 11000.0
-        power_forecast:
-          type: array
-          description: Power generation forecast [W] per time step (PV only).
-          items:
-            type: number
         import_price_forecast:
           type: array
-          description: Import price forecast [price/Wh] per time step (Grid only).
+          description: Import price forecast [price/Wh] per time step.
           items:
             type: number
         export_price_forecast:
           type: array
-          description: Export price forecast [price/Wh] per time step (Grid only).
+          description: Export price forecast [price/Wh] per time step.
           items:
             type: number
 
-    # --- LOADS ---
-    Load:
+    PV:
       type: object
       required:
         - id
         - name
         - current_power
-        - controllable
+        - power_forecast
+      properties:
+        id:
+          type: string
+          example: "pv_1"
+        name:
+          type: string
+          example: "Rooftop PV"
+        current_power:
+          type: number
+          description: Current production power in Watts.
+          example: 800.0
+        power_forecast:
+          type: array
+          description: Power generation forecast [W] per time step.
+          items:
+            type: number
+
+    # --- LOADS ---
+    BaseLoad:
+      type: object
+      required:
+        - id
+        - name
+        - current_power
+        - power_forecast
       properties:
         id:
           type: string
@@ -168,31 +195,49 @@ components:
           example: "Household Base Load"
         current_power:
           type: number
-          description: Current consumption power in Watts (Always >= 0). For base loads, measured as total house consumption minus all modelled devices.
+          description: Current consumption power in Watts (Always >= 0), measured as total house consumption minus all modelled devices.
           example: 450.0
-        controllable:
-          type: boolean
-          example: false
-          description: False for base load (fixed at forecast), true for controllable loads.
-        average_power:
-          type: number
-          description: Average power [W] (Controllable loads only).
-        energy_demand:
-          type: number
-          description: Total energy demand [Wh] (Controllable loads only).
-        earliest_start_time:
-          type: string
-          format: date-time
-          description: Earliest allowed start timestamp (Controllable loads only).
-        latest_finish_time:
-          type: string
-          format: date-time
-          description: Latest allowed finish timestamp (Controllable loads only).
         power_forecast:
           type: array
           description: Uncontrollable power demand forecast [W] per time step.
           items:
             type: number
+
+    ControllableLoad:
+      type: object
+      required:
+        - id
+        - name
+        - current_power
+        - average_power
+        - energy_demand
+      properties:
+        id:
+          type: string
+          example: "dishwasher"
+        name:
+          type: string
+          example: "Dishwasher"
+        current_power:
+          type: number
+          description: Current consumption power in Watts (Always >= 0).
+          example: 0.0
+        average_power:
+          type: number
+          description: Average power [W].
+          example: 1500.0
+        energy_demand:
+          type: number
+          description: Total energy demand [Wh].
+          example: 1800.0
+        earliest_start_time:
+          type: string
+          format: date-time
+          description: Earliest allowed start timestamp.
+        latest_finish_time:
+          type: string
+          format: date-time
+          description: Latest allowed finish timestamp.
 
     # --- PHYSICAL HOME BATTERY ---
     HomeBattery:
@@ -516,6 +561,7 @@ components:
         - status
         - objective_cost
         - schedule
+        - storage_soc
       properties:
         status:
           type: string
@@ -527,7 +573,7 @@ components:
           example: 1.24
         schedule:
           type: object
-          description: Dictionary mapping asset IDs to their scheduled power setpoints [W] for each time step.
+          description: Dictionary mapping asset IDs to their scheduled power [W] for each time step. Includes the grid (+ import, - export), controllable loads and storage assets.
           additionalProperties:
             type: array
             items:
@@ -536,6 +582,17 @@ components:
             home_battery: [2500.0, 2500.0, 0.0, -1500.0]
             ev_battery: [0.0, 7400.0, 7400.0, 0.0]
             building_thermal_mass: [4800.0, 0.0, -2000.0, 0.0]
+        storage_soc:
+          type: object
+          description: Dictionary mapping storage asset IDs to their State of Charge (SoC) [-] for each time step (0.0 to 1.0, where 1.0 is fully charged).
+          additionalProperties:
+            type: array
+            items:
+              type: number
+          example:
+            home_battery: [0.50, 0.65, 0.65, 0.45]
+            ev_battery: [0.80, 1.00, 1.00, 0.95]
+            building_thermal_mass: [0.60, 0.60, 0.50, 0.50]
 
     # --- HEALTH RESPONSE ---
     HealthResponse:
@@ -555,8 +612,8 @@ components:
         - timestamp
         - time_step_duration_hours
         - horizon_hours
-        - sources
-        - loads
+        - grid
+        - base_load
         - storage
       properties:
         timestamp:
@@ -574,14 +631,18 @@ components:
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
-        sources:
+        grid:
+          $ref: '#/components/schemas/Grid'
+        pv:
           type: array
           items:
-            $ref: '#/components/schemas/Source'
-        loads:
+            $ref: '#/components/schemas/PV'
+        base_load:
+          $ref: '#/components/schemas/BaseLoad'
+        controllable_loads:
           type: array
           items:
-            $ref: '#/components/schemas/Load'
+            $ref: '#/components/schemas/ControllableLoad'
         storage:
           type: array
           items:

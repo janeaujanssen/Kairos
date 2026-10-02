@@ -1,513 +1,377 @@
-"""
-Layer 2: Optimizer Core.
+"""Kairos optimizer (see backend_architecture.md, section "Optimizer").
 
-Solves the constrained optimization problem (self-consumption or cost
-minimization) over the planning horizon using a Mixed Integer Linear Program,
-via PuLP + the CBC solver.
+The module follows the structure of the architecture document:
 
-Scope (per architecture doc "start with Grid, PV, Battery and Home Load"):
-    Sources : Grid, PV
-    Storage : Home Battery
-    Loads   : Home Consumption (fixed, uncontrollable)
+1. Decision variables    - "High Level Process": power setpoints of all controllable assets
+2. Objective             - "Optimization Objective": cost, BTM discharge benefit,
+                           end-of-horizon value, secondary objectives
+3. Constraints           - "Optimizer Constraints": energy balance (+ per-asset constraints)
+4. optimize()            - ties the above together and solves the MILP with CBC/PuLP
 
-Energy balance enforced at every timestep t:
-    Grid_t + PV_t = Load_t + Battery_t
-(with the project's sign convention: Grid/PV positive = supply, Battery
-positive = charging, Load always >= 0)
-
-Passive losses (e.g., battery self-discharge, thermal storage heat loss) are
-accounted for internally in the SoC dynamics: they reduce the effective
-charging/discharging power but do not appear as external demands in the
-energy balance.
-
-Soft constraints: the Home Battery's SoC bounds may be violated at a
-(large) per-kWh penalty cost rather than making the problem infeasible --
-this lets the optimizer always return a best-achievable schedule (e.g. under
-a bad forecast) while flagging the violation instead of failing outright.
-Grid import/export limits remain hard bounds (physical breaker limits).
+Sign convention: source power + supply, storage power + charge / - discharge, load power >= 0.
+Power is in W, energy in Wh, prices in price/Wh. Energy per step = power * dt.
 """
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
-from typing import List, Optional
+import math
+from dataclasses import dataclass
+from datetime import datetime
 
-import numpy as np
 import pulp
 
-from assets import Source, Storage, Load
+from classes import (
+    BTM,
+    DHW,
+    PV,
+    BaseLoad,
+    Battery,
+    ControllableLoad,
+    Grid,
+    Load,
+    Source,
+    Storage,
+)
 
-# Tolerance threshold for detecting constraint violations
-# Violations below this threshold are considered negligible numerical noise
-VIOLATION_EPS = 1e-6
+# Weight of the peak-leveling tie-breaker relative to the average import price.
+PEAK_WEIGHT = 1e-6
 
-
-@dataclass
-class Violation:
-    """Records when a soft constraint is violated (e.g., SoC exceeds bounds).
-    
-    Attributes:
-        asset: Name of the asset where violation occurred
-        type: Description of violation type (e.g., "SoC below minimum")
-        max_violation: Maximum violation magnitude across all timesteps
-        penalty_cost: Total cost incurred due to this violation
-    """
-    asset: str
-    type: str
-    max_violation: float
-    penalty_cost: float
+Expr = pulp.LpAffineExpression | float
 
 
 @dataclass
 class OptimizationResult:
-    """Stores the complete optimization solution and metadata.
-    
-    Attributes:
-        status: Solver status ("Optimal", "Not Solved", etc.)
-        solve_time: CPU time spent solving the optimization problem (seconds)
-        objective_value: The minimized objective value
-        
-        hours: Time indices for each timestep
-        dt_hours: Length of each timestep (hours)
-        
-        grid_import/export: Power schedule for grid import and export (kW per timestep)
-        pv_power: PV generation forecast used in optimization (kW per timestep)
-        load_power: Load forecast used in optimization (kW per timestep)
-        
-        storages: Multi-storage results dict {name: {"power": array (positive=charge),
-                                                      "soc": array (0-1),
-                                                      "passive_discharge": array}}
-        
-        price_import/export: Energy prices used in cost calculation (€/kWh)
-        
-        cost_energy: Total grid energy cost (€)
-        cost_penalty: Total cost from constraint violations (€)
-        non_electrical_discharge_benefit: Benefit from discharging thermal storage (€)
-        cost_total: Total cost = cost_energy + cost_penalty - benefit
-        
-        *_per_interval: Cost breakdowns for each timestep (for visualization/debugging)
-        violations: List of constraint violations that occurred
-    """
-    status: str = "Not Solved"
-    solve_time: float = 0.0
-    objective_value: Optional[float] = None
+    """Solver status, total cost and the power schedule per asset, plus SoC for storages."""
 
-    # Time and timestep information
-    hours: np.ndarray = field(default_factory=lambda: np.array([]))
-    dt_hours: float = 1.0
-
-    # Power schedules and forecasts
-    grid_import: np.ndarray = field(default_factory=lambda: np.array([]))
-    grid_export: np.ndarray = field(default_factory=lambda: np.array([]))
-    pv_power: np.ndarray = field(default_factory=lambda: np.array([]))
-    load_power: np.ndarray = field(default_factory=lambda: np.array([]))
-    
-    # Multi-storage support: storages dict {asset_name: {"power": array, "soc": array, "passive_discharge": array}}
-    storages: dict = field(default_factory=dict)
-
-    # Pricing information
-    price_import: np.ndarray = field(default_factory=lambda: np.array([]))
-    price_export: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # Cost components
-    cost_energy: float = 0.0
-    cost_penalty: float = 0.0
-    non_electrical_discharge_benefit: float = 0.0  # Benefit from non-electrical storage discharge (reduces grid heating cost)
-    cost_total: float = 0.0
-    
-    # Per-interval cost breakdowns for visualization and debugging
-    cost_energy_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
-    non_electrical_discharge_benefit_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
-    cost_penalty_per_interval: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # Constraint violations
-    violations: List[Violation] = field(default_factory=list)
-
-    @property
-    def is_optimal(self) -> bool:
-        """Returns True if the solver found an optimal solution."""
-        return self.status == "Optimal"
-
-    def control_at_t0(self) -> dict:
-        """Extracts hardware setpoints from the first timestep to apply immediately.
-        
-        Returns:
-            Dictionary with keys like 'grid_import_kw', 'grid_export_kw', 
-            '{storage_name}_power_kw' containing the power setpoint for the next interval.
-        """
-        if not self.storages or len(self.grid_import) == 0:
-            return {}
-        ctrl = {"grid_import_kw": float(self.grid_import[0]), "grid_export_kw": float(self.grid_export[0])}
-        for storage_name, storage_data in self.storages.items():
-            ctrl[f"{storage_name.lower().replace(' ', '_')}_power_kw"] = float(storage_data["power"][0])
-        return ctrl
+    status: str
+    objective_cost: float
+    schedule: dict[str, list[float]]  # asset id -> power setpoint [W] per step
+    storage_soc: dict[str, list[float]]  # asset id -> SoC (State of Charge) [-] per step
 
 
-class Optimizer:
-    """Sets up and solves the constrained Mixed Integer Linear Program (MILP) optimization.
-    
-    The optimizer minimizes total cost (or self-consumption) while respecting:
-    - Energy balance (generation = demand + storage changes)
-    - Asset power and energy limits
-    - Storage state-of-charge (SoC) constraints (soft, with penalty for violations)
-    - Grid import/export limits (hard constraints, physical limits)
-    
-    Multi-storage support: can optimize across battery, EV, building thermal, DHW, etc.
-    """
+# ---------------------------------------------------------------------------
+# 1. Decision variables
+# ---------------------------------------------------------------------------
+@dataclass
+class GridModel:
+    """Grid import/export variables of the optimization problem."""
 
-    def __init__(
-        self,
-        grid: Source,  # Grid asset with import/export prices and limits
-        pv: Source,  # PV asset with power forecast
-        storages: List[Storage],  # All storage assets (battery, EV, thermal, etc.)
-        load: Load,  # Load asset with consumption forecast
-        hours: np.ndarray,  # Time index for each timestep
-        dt_hours: float,  # Duration of each timestep (hours)
-        mode: str = "cost",  # "cost" (minimize €) | "self_consumption" (minimize imports)
-        peak_leveling: bool = False,  # Secondary objective: minimize grid peak power
-        charging_priority: bool = False,  # Secondary objective: prefer charging storage over exporting PV
-        solver_tolerance: float = 1e-9,  # MIP gap tolerance for solver (relative)
-        max_iterations: int = 500,  # Maximum solver iterations
-        soft_penalty: float = 1000.0,  # Cost penalty per kWh of SoC constraint violation
-    ):
-        # Store all assets and problem parameters
-        self.grid = grid
-        self.pv = pv
-        self.storages = storages  # List of Storage objects
-        self.load = load
-        self.hours = hours
-        self.dt = dt_hours
-        self.mode = mode
-        self.peak_leveling = peak_leveling
-        self.charging_priority = charging_priority
-        self.solver_tolerance = solver_tolerance
-        self.max_iterations = max_iterations
-        self.soft_penalty = soft_penalty
-
-    def solve(self) -> OptimizationResult:
-        """Builds and solves the optimization problem.
-        
-        Returns:
-            OptimizationResult with the optimal power schedules, costs, and constraint violations.
-        """
-        # Extract forecasts and prepare data
-        pv_forecast = np.asarray(self.pv.power_forecast, dtype=float)
-        load_forecast = np.asarray(self.load.power_forecast, dtype=float)
-        price_import = np.asarray(self.grid.price_forecast, dtype=float)
-        price_export = price_import * (self.grid.export_price_fraction or 0.0)
-        n = len(load_forecast)  # Number of timesteps
-        dt = self.dt  # Timestep duration (hours)
-
-        # Initialize result object
-        result = OptimizationResult(hours=self.hours, dt_hours=dt)
-        result.pv_power = pv_forecast
-        result.load_power = load_forecast
-        result.price_import = price_import
-        result.price_export = price_export
-
-        # Create the MILP problem object (PuLP + CBC solver)
-        prob = pulp.LpProblem("EMS_Optimization", pulp.LpMinimize)
-
-        # === DECISION VARIABLES ===
-        # Grid power (kW at each timestep)
-        max_imp = self.grid.max_import_power if self.grid.max_import_power is not None else 1e6
-        max_exp = self.grid.max_export_power if self.grid.max_export_power is not None else 1e6
-
-        # Grid import power for each timestep (non-negative, hard upper bound)
-        p_import = [pulp.LpVariable(f"p_import_{t}", lowBound=0, upBound=max_imp) for t in range(n)]
-        # Grid export power for each timestep (non-negative, hard upper bound)
-        p_export = [pulp.LpVariable(f"p_export_{t}", lowBound=0, upBound=max_exp) for t in range(n)]
-        
-        # === MULTI-STORAGE DECISION VARIABLES ===
-        # For each storage: power (split into separate charge/discharge variables),
-        # state-of-charge (SoC), and slack variables for soft constraint violation.
-        # Power split: Net power = p_c - p_d where p_c=charge (>=0), p_d=discharge (>=0)
-        # Energy stored changes by: p_c * eta_c - p_d (with efficiency losses)
-        storage_power_charge_dict = {}  # {storage_name: [p_c_vars]} - charging power for each timestep
-        storage_power_discharge_dict = {}  # {storage_name: [p_d_vars]} - discharging power for each timestep
-        storage_soc_dict = {}    # {storage_name: [soc_vars]} - state of charge 0-1 (n+1 time points)
-        storage_slack_low_dict = {}  # {storage_name: [slack_vars]} - violation of minimum SoC
-        storage_slack_high_dict = {}  # {storage_name: [slack_vars]} - violation of maximum SoC
-        storage_passive_discharge_dict = {}  # {storage_name: passive_loss_kW} - self-discharge rate
-        storage_charge_efficiency_dict = {}  # {storage_name: eta_c} - charging efficiency 0-1
-        storage_discharge_efficiency_dict = {}  # {storage_name: eta_d} - discharging efficiency 0-1
-        storage_discharge_to_network_dict = {}  # {storage_name: bool} - whether discharge can supply electrical load
-        
-        # Create variables and constraints for each storage asset
-        for storage in self.storages:
-            name = storage.name
-            constraints = storage.get_constraints()
-            
-            # Separate charging and discharging power variables (mutual exclusion enforced below)
-            # Both are non-negative; net power = charge - discharge
-            storage_power_charge_dict[name] = [
-                pulp.LpVariable(f"{name}_p_charge_{t}", lowBound=0, upBound=storage.max_charge_power)
-                for t in range(n)
-            ]
-            storage_power_discharge_dict[name] = [
-                pulp.LpVariable(f"{name}_p_discharge_{t}", lowBound=0, upBound=storage.max_discharge_power)
-                for t in range(n)
-            ]
-            
-            # State of charge variables (normalized 0-1) at each time point (n+1 points)
-            storage_soc_dict[name] = [pulp.LpVariable(f"{name}_soc_{t}", lowBound=0, upBound=1) for t in range(n + 1)]
-            # Slack variables for soft constraint violations (allow SoC to deviate from bounds with penalty)
-            storage_slack_low_dict[name] = [pulp.LpVariable(f"{name}_soc_low_slack_{t}", lowBound=0) for t in range(n + 1)]
-            storage_slack_high_dict[name] = [pulp.LpVariable(f"{name}_soc_high_slack_{t}", lowBound=0) for t in range(n + 1)]
-            
-            # Extract efficiency and constraint parameters for this storage
-            storage_passive_discharge_dict[name] = constraints.get("passive_discharge_power", 0.0)
-            storage_charge_efficiency_dict[name] = constraints.get("charge_efficiency", 0.95)
-            storage_discharge_efficiency_dict[name] = constraints.get("discharge_efficiency", 0.95)
-            storage_discharge_to_network_dict[name] = constraints.get("discharge_to_electrical_network", True)
-            storage_charging_window = constraints.get("charging_window", None)  # e.g., for EV with charging window
-            
-            # === MUTUAL EXCLUSIVITY: Charge OR Discharge, not both ===
-            # Prevents unphysical energy arbitrage when efficiencies have asymmetry.
-            # For each timestep, one of two binary modes holds:
-            #   mode=0: charging allowed (p_discharge=0)
-            #   mode=1: discharging allowed (p_charge=0)
-            storage_mode_vars = [pulp.LpVariable(f"{name}_mode_{t}", cat='Binary') for t in range(n)]
-            for t in range(n):
-                # If mode=0 (charging): discharge power must be 0
-                prob += storage_power_charge_dict[name][t] <= storage.max_charge_power * (1 - storage_mode_vars[t]), f"{name}_charge_if_charging_mode_{t}"
-                # If mode=1 (discharging): charge power must be 0 (mode multiplied forces this when mode=0)
-                prob += storage_power_discharge_dict[name][t] <= storage.max_discharge_power * storage_mode_vars[t], f"{name}_discharge_if_discharging_mode_{t}"
-            
-            # === SoC DYNAMICS ===
-            # Initial condition: SoC at t=0 equals measured current state
-            prob += storage_soc_dict[name][0] == storage.current_soc, f"{name}_initial_soc"
-            
-            # SoC evolution with efficiency, passive loss, and demand effects:
-            # SoC_t+1 = SoC_t + [(p_charge*eta_c - p_discharge - passive_loss - demand) * dt] / capacity
-            passive_loss = storage_passive_discharge_dict[name]  # kW (self-discharge rate)
-            eta_c = storage_charge_efficiency_dict[name]  # Charging efficiency (0-1)
-            demand_power = storage.demand_forecast if storage.demand_forecast is not None else np.zeros(n)  # kW (e.g., DHW demand)
-            
-            # SoC evolution equation for each timestep
-            for t in range(n):
-                prob += (
-                    storage_soc_dict[name][t + 1] == storage_soc_dict[name][t] + 
-                    ((storage_power_charge_dict[name][t] * eta_c - storage_power_discharge_dict[name][t] - passive_loss - demand_power[t]) * dt) / storage.capacity,
-                    f"{name}_soc_dynamics_{t}",
-                )
-            
-            # === HARD CONSTRAINT: Demand satisfaction ===
-            # Ensure SoC is sufficient to meet demand at each timestep.
-            # Prevents optimizer from "overdrawing" storage (demand must have energy available).
-            for t in range(n):
-                if demand_power[t] > VIOLATION_EPS:  # Only enforce if demand is non-negligible
-                    prob += storage_soc_dict[name][t] >= (demand_power[t] * dt / storage.capacity), f"{name}_demand_requirement_{t}"
-            
-            # === SOFT SoC BOUNDS ===
-            # Allow SoC to violate min/max bounds with penalty instead of making problem infeasible.
-            # This enables the optimizer to find a feasible solution even under adverse conditions.
-            for t in range(n + 1):
-                # SoC can drop below min_soc by amount slack_low (violation)
-                prob += storage_soc_dict[name][t] >= storage.min_soc - storage_slack_low_dict[name][t], f"{name}_soc_min_{t}"
-                # SoC can exceed max_soc by amount slack_high (violation)
-                prob += storage_soc_dict[name][t] <= storage.max_soc + storage_slack_high_dict[name][t], f"{name}_soc_max_{t}"
-            
-            # === TIME-DEPENDENT CONSTRAINTS ===
-            # EV charging window: if the EV is not available (plugged in) at this timestep, no power transfer allowed
-            if storage_charging_window is not None:
-                for t in range(n):
-                    if storage_charging_window[t] < 0.5:  # EV not available at this timestep
-                        # Force both charge and discharge to zero
-                        prob += storage_power_charge_dict[name][t] == 0, f"{name}_window_charge_{t}"
-                        prob += storage_power_discharge_dict[name][t] == 0, f"{name}_window_discharge_{t}"
-            
-            # Note: One-way charger for EV has max_discharge_power=0 (already set in Storage init)
+    grid: Grid
+    import_power: dict[int, pulp.LpVariable]  # W, >= 0
+    export_power: dict[int, pulp.LpVariable]  # W, >= 0
+    peak: pulp.LpVariable  # max(import, export) over the horizon, for the tie-breaker
 
 
-        # === ENERGY BALANCE CONSTRAINT ===
-        # At each timestep: Grid Supply + PV Generation = Load Consumption + Storage Charging/Discharging
-        # Grid power (p_import - p_export) + PV = Load + Storage net power
-        #
-        # For storage:
-        #   - System supplies p_charge power (charging)
-        #   - System receives p_discharge * discharge_efficiency (only if "discharge_to_electrical_network")
-        # 
-        # Note: Thermal storage (building thermal, DHW) has discharge_to_electrical_network=False,
-        #       so its discharge doesn't contribute to energy balance (it's used internally, not exported)
-        for t in range(n):
-            # Total storage power demand (from system perspective)
-            # Positive = system supplies energy (charging), negative = system receives energy (discharging)
-            total_storage_system_power = pulp.lpSum(
-                storage_power_charge_dict[s.name][t] - (
-                    # Only include discharge power for electrical storages (battery, EV)
-                    storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name]
-                    if storage_discharge_to_network_dict[s.name]
-                    else 0
-                )
-                for s in self.storages
-            )
-            # Energy balance equation
-            prob += (
-                (p_import[t] - p_export[t]) + pv_forecast[t] == load_forecast[t] + total_storage_system_power,
-                f"energy_balance_{t}",
-            )
+@dataclass
+class StorageFlows:
+    """Per-step flows of one storage asset, defined by its storage class."""
 
-        # === OBJECTIVE FUNCTION ===
-        # Primary objective: minimize energy cost or self-consumption
-        if self.mode == "self_consumption":
-            # Minimize total grid import + export (maximize self-consumption)
-            energy_term = dt * pulp.lpSum(p_import[t] + p_export[t] for t in range(n))
-        else:
-            # Minimize total energy cost: import cost - export revenue
-            energy_term = dt * pulp.lpSum(
-                p_import[t] * price_import[t] - p_export[t] * price_export[t] for t in range(n)
-            )
+    gain: list[Expr]  # energy added to the store [Wh]
+    loss: list[Expr]  # energy removed from the store by discharging [Wh]
+    electrical_power: list[Expr]  # + charge / - discharge seen by the electrical network [W]
+    setpoint: list[Expr]  # power setpoint reported in the schedule [W]
+    discharged_energy: list[Expr] | None = None  # BTM only, for the discharge benefit [Wh]
 
-        # Penalty term: cost of soft constraint violations (SoC bound violations)
-        penalty_term = self.soft_penalty * pulp.lpSum(
-            storage_slack_low_dict[s.name][t] + storage_slack_high_dict[s.name][t]
-            for s in self.storages for t in range(n + 1)
+
+@dataclass
+class StorageModel:
+    """A storage asset together with its flows and end-of-horizon energy."""
+
+    storage: Storage
+    flows: StorageFlows
+    remaining_energy: pulp.LpVariable  # stored energy at the end of the horizon [Wh]
+    eta_value: float  # grid Wh that one stored Wh is worth at the end of the horizon
+    discharge_benefit: Expr = 0.0  # BTM only: avoided cost of discharging
+    stored_energy_per_step: list[pulp.LpVariable] = None  # stored energy [Wh] at end of each step
+
+
+def add_grid(prob: pulp.LpProblem, grid: Grid, n_steps: int) -> GridModel:
+    """Add import/export variables limited by the grid connection, never both in one step."""
+    steps = range(n_steps)
+    imp = pulp.LpVariable.dicts("grid_import", steps, 0, grid.max_import_power)
+    exp = pulp.LpVariable.dicts("grid_export", steps, 0, grid.max_export_power)
+    importing = pulp.LpVariable.dicts("grid_importing", steps, cat=pulp.LpBinary)
+    peak = pulp.LpVariable("grid_peak", 0)
+    for t in steps:
+        # No simultaneous import and export.
+        prob += imp[t] <= grid.max_import_power * importing[t]
+        prob += exp[t] <= grid.max_export_power * (1 - importing[t])
+        prob += peak >= imp[t]
+        prob += peak >= exp[t]
+    return GridModel(grid, imp, exp, peak)
+
+
+def add_controllable_load(
+    prob: pulp.LpProblem, load: ControllableLoad, idx: int, start: datetime, dt: float, n_steps: int
+) -> list[Expr]:
+    """Run once, uninterrupted, at average power, inside the allowed window."""
+    run_steps = math.ceil(load.energy_demand / (load.average_power * dt) - 1e-9)
+    first = 0
+    if load.earliest_start_time is not None:
+        first = max(0, math.ceil(_steps_since(start, load.earliest_start_time, dt) - 1e-9))
+    end = n_steps
+    if load.latest_finish_time is not None:
+        end = min(n_steps, math.floor(_steps_since(start, load.latest_finish_time, dt) + 1e-9))
+    start_steps = range(first, end - run_steps + 1)
+    if len(start_steps) == 0:
+        raise ValueError(f"Load {load.id!r} does not fit in its operating window")
+
+    starts = pulp.LpVariable.dicts(f"load{idx}_start", start_steps, cat=pulp.LpBinary)
+    prob += pulp.lpSum(starts.values()) == 1
+    return [
+        load.average_power * pulp.lpSum(starts[s] for s in start_steps if s <= t < s + run_steps)
+        for t in range(n_steps)
+    ]
+
+
+def add_battery(
+    prob: pulp.LpProblem, s: Battery, idx: int, avail: list[int], dt: float, n_steps: int
+) -> StorageFlows:
+    """Continuous charge/discharge, limited by max powers and availability."""
+    steps = range(n_steps)
+    charge = pulp.LpVariable.dicts(f"s{idx}_charge", steps, 0)
+    discharge = pulp.LpVariable.dicts(f"s{idx}_discharge", steps, 0)
+    charging = pulp.LpVariable.dicts(f"s{idx}_charging", steps, cat=pulp.LpBinary)
+    for t in steps:
+        prob += charge[t] <= s.max_charge_power * avail[t] * charging[t]
+        prob += discharge[t] <= s.max_discharge_power * avail[t] * (1 - charging[t])
+    electrical = [charge[t] - discharge[t] for t in steps]
+    return StorageFlows(
+        gain=[charge[t] * s.charge_efficiency * dt for t in steps],
+        loss=[discharge[t] * dt / s.discharge_efficiency for t in steps],
+        electrical_power=electrical,
+        setpoint=electrical,
+    )
+
+
+def add_dhw(
+    prob: pulp.LpProblem, s: DHW, idx: int, avail: list[int], dt: float, n_steps: int
+) -> StorageFlows:
+    """Heat pump on/off at a discrete electric power; thermal output only via demand."""
+    steps = range(n_steps)
+    on = pulp.LpVariable.dicts(f"s{idx}_on", steps, cat=pulp.LpBinary)
+    for t in steps:
+        prob += on[t] <= avail[t]
+    electrical = [s.charge_power * on[t] for t in steps]
+    return StorageFlows(
+        gain=[s.charge_power * s.charge_efficiency * dt * on[t] for t in steps],
+        loss=[0.0] * n_steps,
+        electrical_power=electrical,
+        setpoint=electrical,
+    )
+
+
+def add_btm(
+    prob: pulp.LpProblem, s: BTM, idx: int, avail: list[int], dt: float, n_steps: int
+) -> StorageFlows:
+    """Three modes per step: +dT (charge), -dT (discharge), neutral. Only +dT draws extra power."""
+    steps = range(n_steps)
+    plus = pulp.LpVariable.dicts(f"s{idx}_plus_dT", steps, cat=pulp.LpBinary)
+    minus = pulp.LpVariable.dicts(f"s{idx}_minus_dT", steps, cat=pulp.LpBinary)
+    for t in steps:
+        prob += plus[t] + minus[t] <= avail[t]
+    return StorageFlows(
+        gain=[s.charge_power * s.charge_efficiency * dt * plus[t] for t in steps],
+        loss=[s.discharge_power * dt / s.discharge_efficiency * minus[t] for t in steps],
+        electrical_power=[s.charge_power * plus[t] for t in steps],
+        setpoint=[s.charge_power * plus[t] - s.discharge_power * minus[t] for t in steps],
+        discharged_energy=[s.discharge_power * dt * minus[t] for t in steps],
+    )
+
+
+def add_storage(
+    prob: pulp.LpProblem, s: Storage, idx: int, dt: float, n_steps: int, import_price: list[float]
+) -> StorageModel:
+    """Class-specific flows from the add_* functions, shared state-of-charge dynamics here."""
+    steps = range(n_steps)
+    demand = s.energy_demand_forecast or [0.0] * n_steps
+    avail = s.availability_window or [1] * n_steps
+    _check_len(f"{s.id} energy_demand_forecast", demand, n_steps)
+    _check_len(f"{s.id} availability_window", avail, n_steps)
+
+    discharge_benefit: Expr = 0.0
+    if isinstance(s, Battery):
+        flows = add_battery(prob, s, idx, avail, dt, n_steps)
+        eta_value = s.discharge_efficiency
+    elif isinstance(s, DHW):
+        flows = add_dhw(prob, s, idx, avail, dt, n_steps)
+        eta_value = s.discharge_efficiency / s.charge_efficiency
+    elif isinstance(s, BTM):
+        flows = add_btm(prob, s, idx, avail, dt, n_steps)
+        eta_value = s.discharge_efficiency / s.default_efficiency
+        discharge_benefit = building_thermal_discharge_benefit(
+            s, flows.discharged_energy, import_price
         )
+    else:
+        raise TypeError(f"Unsupported storage type: {type(s).__name__}")
 
-        # Secondary objectives (tie-breaking): very small weights so they don't override primary objective
-        # These help select between equally-good solutions
-        eps = 1e-6
-        tie_break_term = 0
-        peak_var = None
-        if self.peak_leveling:
-            # Secondary: minimize grid peak power (smaller bills, less grid stress)
-            peak_var = pulp.LpVariable("grid_peak", lowBound=0)
-            for t in range(n):
-                prob += peak_var >= p_import[t], f"peak_ge_import_{t}"
-                prob += peak_var >= p_export[t], f"peak_ge_export_{t}"
-            tie_break_term += eps * peak_var
-        if self.charging_priority:
-            # Secondary: prefer charging storage over exporting PV (reduces grid stress, keeps battery charged)
-            tie_break_term += eps * dt * pulp.lpSum(p_export[t] for t in range(n))
-
-        # Non-electrical discharge benefit: cost avoidance from thermal storages
-        # When discharging building thermal or DHW (discharge_to_electrical_network=False),
-        # the stored heat replaces grid-supplied heating (e.g., via heat pump at high price).
-        # Benefit (negative cost) = (discharge_power * efficiency / charge_efficiency) * grid_price
-        # This benefit is subtracted from total cost to reward discharging thermal storage at high prices.
-        non_electrical_discharge_benefit = dt * pulp.lpSum(
-            storage_power_discharge_dict[s.name][t] * storage_discharge_efficiency_dict[s.name] / storage_charge_efficiency_dict[s.name] * price_import[t]
-            for s in self.storages if not storage_discharge_to_network_dict[s.name]
-            for t in range(n)
+    # energy[t+1] = energy[t] + charged - discharged - demand - passive loss
+    energy = pulp.LpVariable.dicts(f"s{idx}_energy", range(n_steps + 1), 0, s.energy_capacity)
+    prob += energy[0] == s.current_soc * s.energy_capacity
+    for t in steps:
+        prob += energy[t + 1] == (
+            energy[t] + flows.gain[t] - flows.loss[t] - demand[t] - s.passive_discharge_power * dt
         )
+        prob += energy[t + 1] >= s.min_soc * s.energy_capacity
+        prob += energy[t + 1] <= s.max_soc * s.energy_capacity
 
-        # Total objective to minimize
-        prob += energy_term + penalty_term + tie_break_term - non_electrical_discharge_benefit, "objective"
+    stored_energy_per_step = [energy[t + 1] for t in steps]
+    return StorageModel(s, flows, energy[n_steps], eta_value, discharge_benefit, stored_energy_per_step)
 
-        # === SOLVE THE OPTIMIZATION PROBLEM ===
-        # Use CBC (Coin Branch-and-Cut) solver via PuLP, with optional iteration limit
-        solver_options = ["maxN", str(int(self.max_iterations))] if self.max_iterations else []
-        try:
-            solver = pulp.PULP_CBC_CMD(msg=False, gapRel=self.solver_tolerance, options=solver_options)
-            start = time.time()
-            prob.solve(solver)
-        except Exception:
-            # Fallback: if max-iterations flag is not recognized, use default CBC (just gapRel tolerance)
-            solver = pulp.PULP_CBC_CMD(msg=False, gapRel=self.solver_tolerance)
-            start = time.time()
-            prob.solve(solver)
-        result.solve_time = time.time() - start
-        result.status = pulp.LpStatus[prob.status]  # Extract status: "Optimal", "Not Solved", etc.
 
-        # === EXTRACT SOLUTION ===
-        # Helper to safely extract variable values (handle None from infeasible/unsolved)
-        def val(var):
-            v = var.value()
-            return 0.0 if v is None else v
+# ---------------------------------------------------------------------------
+# 2. Objective
+# ---------------------------------------------------------------------------
+def energy_cost(model: GridModel, dt: float) -> Expr:
+    """Sum over t of: import energy * import price - export energy * export price."""
+    g = model.grid
+    return pulp.lpSum(
+        model.import_power[t] * dt * g.import_price_forecast[t]
+        - model.export_power[t] * dt * g.export_price_forecast[t]
+        for t in model.import_power
+    )
 
-        # Extract grid power schedules
-        result.grid_import = np.array([val(v) for v in p_import])
-        result.grid_export = np.array([val(v) for v in p_export])
-        
-        # Extract multi-storage results: combine charge/discharge power into net power
-        for storage in self.storages:
-            name = storage.name
-            p_c = np.array([val(v) for v in storage_power_charge_dict[name]])
-            p_d = np.array([val(v) for v in storage_power_discharge_dict[name]])
-            net_power = p_c - p_d  # positive = charging, negative = discharging
-            result.storages[name] = {
-                "power": net_power,
-                "soc": np.array([val(v) for v in storage_soc_dict[name]]),  # SoC at each time point
-                "passive_discharge": np.full(n, storage_passive_discharge_dict[name], dtype=float),  # Constant per interval
-            }
 
-        # === COST CALCULATION ===
-        # Grid energy cost per interval (€/interval)
-        cost_energy_per_interval = (result.grid_import * price_import - result.grid_export * price_export) * dt
-        cost_energy = float(np.sum(cost_energy_per_interval))
-        
-        # Non-electrical discharge benefit: cost avoidance from thermal storage discharge
-        # For building thermal and DHW, discharging replaces grid heating, providing benefit at high prices.
-        non_electrical_discharge_benefit_per_interval = np.zeros(n, dtype=float)
-        non_electrical_discharge_benefit = 0.0
-        for storage in self.storages:
-            name = storage.name
-            if not storage_discharge_to_network_dict[name]:  # Only for thermal storages
-                p_d = np.array([val(v) for v in storage_power_discharge_dict[name]])
-                eta_d = storage_discharge_efficiency_dict[name]
-                eta_c = storage_charge_efficiency_dict[name]
-                # Benefit = discharge_power * (efficiency ratio) * grid_price * timestep
-                benefit_per_interval = p_d * eta_d / eta_c * price_import * dt
-                non_electrical_discharge_benefit_per_interval += benefit_per_interval
-                non_electrical_discharge_benefit += np.sum(benefit_per_interval)
-        
-        # Penalty cost from SoC constraint violations
-        total_slack_low = 0.0
-        total_slack_high = 0.0
-        cost_penalty_per_interval = np.zeros(n, dtype=float)
-        for storage in self.storages:
-            name = storage.name
-            slack_low = np.array([val(v) for v in storage_slack_low_dict[name]])
-            slack_high = np.array([val(v) for v in storage_slack_high_dict[name]])
-            total_slack_low += slack_low.sum()
-            total_slack_high += slack_high.sum()
-            # For per-interval penalty, use only the first n elements (one per interval, excluding final SoC point)
-            cost_penalty_per_interval += self.soft_penalty * (slack_low[:n] + slack_high[:n])
-        
-        penalty_cost = float(self.soft_penalty * (total_slack_low + total_slack_high))
+def building_thermal_discharge_benefit(
+    s: BTM, discharged_energy: list[Expr], import_price: list[float]
+) -> Expr:
+    """Discharged energy * (eta_discharge / eta_default) * import price, summed over t."""
+    factor = s.discharge_efficiency / s.default_efficiency
+    return pulp.lpSum(e * factor * p for e, p in zip(discharged_energy, import_price))
 
-        # Store all costs in result
-        result.cost_energy = cost_energy
-        result.cost_penalty = penalty_cost
-        result.non_electrical_discharge_benefit = float(non_electrical_discharge_benefit)
-        result.cost_total = cost_energy + penalty_cost - non_electrical_discharge_benefit
-        result.cost_energy_per_interval = cost_energy_per_interval
-        result.non_electrical_discharge_benefit_per_interval = non_electrical_discharge_benefit_per_interval
-        result.cost_penalty_per_interval = cost_penalty_per_interval
-        # Extract the objective value from the solver
-        obj_val = pulp.value(prob.objective)
-        result.objective_value = float(obj_val) if obj_val is not None else None
 
-        # === DETECT CONSTRAINT VIOLATIONS ===
-        # Collect all soft constraint violations for reporting and debugging
-        violations: List[Violation] = []
-        for storage in self.storages:
-            name = storage.name
-            slack_low = np.array([val(v) for v in storage_slack_low_dict[name]])
-            slack_high = np.array([val(v) for v in storage_slack_high_dict[name]])
-            
-            # Report if SoC dropped below minimum
-            if slack_low.max(initial=0.0) > VIOLATION_EPS:
-                violations.append(
-                    Violation(
-                        asset=name,
-                        type="SoC below minimum",
-                        max_violation=float(slack_low.max()),
-                        penalty_cost=float(self.soft_penalty * slack_low.sum()),
-                    )
-                )
-            # Report if SoC exceeded maximum
-            if slack_high.max(initial=0.0) > VIOLATION_EPS:
-                violations.append(
-                    Violation(
-                        asset=name,
-                        type="SoC above maximum",
-                        max_violation=float(slack_high.max()),
-                        penalty_cost=float(self.soft_penalty * slack_high.sum()),
-                    )
-                )
-        result.violations = violations
+def remaining_storage_value(models: list[StorageModel], future_price: float) -> Expr:
+    """Remaining stored energy * eta_value * future import price."""
+    return pulp.lpSum(m.remaining_energy * m.eta_value * future_price for m in models)
 
-        return result
+
+def peak_leveling(model: GridModel, future_price: float) -> Expr:
+    """Secondary objective: tiny weight, only breaks ties between equal-cost schedules."""
+    return PEAK_WEIGHT * max(abs(future_price), 1e-9) * model.peak
+
+
+# ---------------------------------------------------------------------------
+# 3. Constraints
+# ---------------------------------------------------------------------------
+def add_energy_balance(
+    prob: pulp.LpProblem,
+    grid: GridModel,
+    pv_power: list[float],
+    base_load_power: list[float],
+    controllable_power: list[Expr],
+    storage_power: list[Expr],
+) -> None:
+    """Sum of source power = sum of load power + sum of storage power, every step."""
+    for t in grid.import_power:
+        source_power = grid.import_power[t] - grid.export_power[t] + pv_power[t]
+        prob += source_power == base_load_power[t] + controllable_power[t] + storage_power[t]
+
+
+# ---------------------------------------------------------------------------
+# 4. Optimizer
+# ---------------------------------------------------------------------------
+def optimize(
+    sources: list[Source],
+    loads: list[Load],
+    storage: list[Storage],
+    start: datetime,
+    step_hours: float,
+    n_steps: int,
+    time_limit_s: int = 60,
+) -> OptimizationResult:
+    """Build and solve the MILP, returning the cheapest schedule over the horizon."""
+    dt = step_hours
+    prob = pulp.LpProblem("kairos", pulp.LpMinimize)
+
+    # Fixed inputs: forecasts of grid prices, PV and base load.
+    grid = _single_grid(sources)
+    _check_len("import_price_forecast", grid.import_price_forecast, n_steps)
+    _check_len("export_price_forecast", grid.export_price_forecast, n_steps)
+    pv_power = _sum_forecasts([s for s in sources if isinstance(s, PV)], n_steps)
+    base_load_power = _sum_forecasts([l for l in loads if isinstance(l, BaseLoad)], n_steps)
+
+    # Decision variables: grid, controllable loads, storage.
+    grid_model = add_grid(prob, grid, n_steps)
+
+    schedule: dict[str, list[Expr]] = {
+        grid.id: [grid_model.import_power[t] - grid_model.export_power[t] for t in range(n_steps)]
+    }
+    controllable_power: list[Expr] = [0.0] * n_steps
+    controllable = [l for l in loads if isinstance(l, ControllableLoad) and l.energy_demand > 0]
+    for i, load in enumerate(controllable):
+        power = add_controllable_load(prob, load, i, start, dt, n_steps)
+        schedule[load.id] = power
+        controllable_power = [a + b for a, b in zip(controllable_power, power)]
+
+    storage_models = [
+        add_storage(prob, s, i, dt, n_steps, grid.import_price_forecast)
+        for i, s in enumerate(storage)
+    ]
+    storage_power: list[Expr] = [0.0] * n_steps
+    for m in storage_models:
+        schedule[m.storage.id] = m.flows.setpoint
+        storage_power = [a + b for a, b in zip(storage_power, m.flows.electrical_power)]
+
+    # Constraints.
+    add_energy_balance(
+        prob, grid_model, pv_power, base_load_power, controllable_power, storage_power
+    )
+
+    # Objective: cost - BTM discharge benefit - remaining storage value, plus tie-breaker.
+    future_price = sum(grid.import_price_forecast) / n_steps
+    cost = (
+        energy_cost(grid_model, dt)
+        - pulp.lpSum(m.discharge_benefit for m in storage_models)
+        - remaining_storage_value(storage_models, future_price)
+    )
+    prob += cost + peak_leveling(grid_model, future_price)
+
+    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit_s))
+
+    status = pulp.LpStatus[prob.status]
+    if status == "Infeasible":
+        return OptimizationResult("Infeasible", float("nan"), {}, {})
+    if status != "Optimal":
+        raise RuntimeError(f"Solver ended with status {status!r}")
+
+    storage_soc = {
+        m.storage.id: [float(pulp.value(e)) / m.storage.energy_capacity for e in m.stored_energy_per_step]
+        for m in storage_models
+    }
+    return OptimizationResult(
+        status="Optimal",
+        objective_cost=float(pulp.value(cost)),
+        schedule={k: [float(pulp.value(x)) for x in v] for k, v in schedule.items()},
+        storage_soc=storage_soc,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _check_len(name: str, values: list, n_steps: int) -> None:
+    """Raise if a forecast does not have one value per time step."""
+    if len(values) != n_steps:
+        raise ValueError(f"{name} has {len(values)} entries, expected {n_steps}")
+
+
+def _steps_since(start: datetime, t: datetime, dt: float) -> float:
+    """Time from start to t, expressed in time steps."""
+    return (t - start).total_seconds() / (dt * 3600)
+
+
+def _single_grid(sources: list[Source]) -> Grid:
+    """Return the one Grid source, raising if there is not exactly one."""
+    grids = [s for s in sources if isinstance(s, Grid)]
+    if len(grids) != 1:
+        raise ValueError("Exactly one Grid source is required")
+    return grids[0]
+
+
+def _sum_forecasts(assets: list[PV] | list[BaseLoad], n_steps: int) -> list[float]:
+    """Sum the power forecasts of several assets per time step."""
+    total = [0.0] * n_steps
+    for a in assets:
+        _check_len(f"{a.id} power_forecast", a.power_forecast, n_steps)
+        total = [x + y for x, y in zip(total, a.power_forecast)]
+    return total
