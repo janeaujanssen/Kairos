@@ -1,4 +1,4 @@
-"""Convert API payloads to the classes in classes.py.
+"""Manually checked: Convert API payloads to the classes in classes.py.
 
 - Generic inputs:  already in the generic asset model, mapped one-to-one to classes.
                    Used by /optimize-generic, and by /optimize for grid, PV and loads.

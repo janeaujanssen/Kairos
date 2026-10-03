@@ -1,4 +1,4 @@
-"""Forecast simulation functions to generate time-series from input parameters. Only forecast functions for grid, PV and base load are included here, for EV and DHW forecasts converter.py functions can be used."""
+"""Manually checked: Forecast simulation functions to generate time-series from input parameters. Only forecast functions for grid, PV and base load are included here, for EV and DHW forecasts converter.py functions can be used."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 # Backend Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** draft. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
+> **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
 > - Not super happy with Building Thermal Mass implementation:

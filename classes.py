@@ -1,3 +1,5 @@
+"""Manually checked: Classes for energy devices in Kairos."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

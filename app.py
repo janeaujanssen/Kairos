@@ -1,4 +1,4 @@
-"""Streamlit UI for Kairos, calling the optimization API (see ui_architecture.md)."""
+"""Pure AI: Streamlit UI for Kairos, calling the optimization API (see ui_architecture.md)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import visualizations as viz
 
 API_URL = os.environ.get("KAIROS_API_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="Kairos", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Kairos - Easy, optimized energy scheduling for Home Assistant", page_icon="⚡", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Asset definitions: (key, label, default, kind[, number format])
@@ -112,7 +112,7 @@ FORECAST_FIELDS = {
         ("evening_peak_power", "Evening peak power [W]", 1500.0, "num"),
     ],
     "ev_battery": [
-        ("vehicle_efficiency", "Vehicle efficiency [km/Wh]", 0.005, "num", "%.4f"),
+        ("vehicle_efficiency", "Vehicle efficiency [km/kWh]", 5.0, "num", "%.2f"),
         ("round_trip_distance", "Round trip distance [km]", 100.0, "num"),
         ("expected_departure_time", "Expected departure time", time(9, 0), "time"),
         ("expected_arrival_time", "Expected arrival time", time(18, 0), "time"),
@@ -173,18 +173,18 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
 with st.sidebar:
     run_clicked = st.button("▶ Run optimization", type="primary", width="stretch")
 
-    with st.expander("Sign convention"):
+    with st.expander("Sign Convention Reference"):
         st.markdown(
-            "- **Grid power**: +import, −export\n"
-            "- **PV power**: +production\n"
-            "- **Battery power**: +charge, −discharge\n"
-            "- **DHW battery power**: +charge, −discharge\n"
-            "- **Building battery power**: +charge, −discharge\n"
-            "- **Load power**: +consumption\n"
+            "- **Grid Power**: +import, −export\n"
+            "- **PV Power**: +production\n"
+            "- **Battery Power**: +charge, −discharge\n"
+            "- **DHW Battery Power**: +charge, −discharge\n"
+            "- **Building Battery Power**: +charge, −discharge\n"
+            "- **Load Power**: +consumption\n"
             "- Energy balance: Grid + PV = Load + Storage at every timestep"
         )
 
-    st.subheader("Assets")
+    st.subheader("Asset Enablement Toggles")
     if not st.session_state.assets:
         st.caption("No assets yet. Add them in the Inputs tab.")
     for asset in st.session_state.assets:
@@ -196,6 +196,7 @@ with st.sidebar:
     st.subheader("Configuration")
     horizon_h = st.number_input("Planning horizon [h]", 6, 48, 24, step=1)
     interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
+    start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
 
 # ---------------------------------------------------------------------------
 # Time context
@@ -203,7 +204,7 @@ with st.sidebar:
 step_h = interval_min / 60
 n_steps = round(horizon_h / step_h)
 _now = datetime.now().astimezone().replace(second=0, microsecond=0)
-start = _now.replace(minute=(_now.minute // interval_min) * interval_min if interval_min < 60 else 0)
+start = _now.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
 timestamps = [start + timedelta(hours=i * step_h) for i in range(n_steps)]
 hours_of_day = [(start.hour + start.minute / 60 + i * step_h) % 24 for i in range(n_steps)]
 
@@ -241,6 +242,9 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
                     value = datetime.combine(start.date(), value, tzinfo=start.tzinfo).isoformat()
                 else:
                     value = value.strftime("%H:%M")
+            elif key == "vehicle_efficiency" and t == "ev_battery":
+                # Convert from km/kWh (display) to km/Wh (backend): divide by 1000
+                value = value / 1000
             payload[key] = value
     return payload
 
@@ -258,64 +262,80 @@ def to_generic(asset_type: str, payload: dict):
     return converter.convert_storage(payload, start, step_h, n_steps)
 
 
-def forecast_chart(asset_type: str, payload: dict, generic) -> go.Figure | None:
+def forecast_chart(asset_type: str, payload: dict, generic, forecast: dict = None) -> go.Figure | None:
     """Forecast chart for assets that have time-series forecasts."""
-    if asset_type == "grid":
+    if asset_type == "grid" and forecast:
+        # Convert prices back from $/Wh to $/kWh for display (multiply by 1000)
+        import_prices_kwh = [p * 1000 for p in payload["import_price_forecast"]]
+        export_prices_kwh = [p * 1000 for p in payload["export_price_forecast"]]
         fig = go.Figure()
-        fig.add_scatter(x=timestamps, y=payload["import_price_forecast"], name="Import price",
-                        line=dict(color=viz.RED), line_shape="hv")
-        fig.add_scatter(x=timestamps, y=payload["export_price_forecast"], name="Export price",
-                        line=dict(color=viz.GREEN, dash="dash"), line_shape="hv")
-        return viz.style(fig, "price/Wh")
+        fig.add_scatter(x=timestamps, y=import_prices_kwh, name="Import price",
+                        line=dict(color=viz.ASSET_COLORS["grid"][1]), line_shape="hv",
+                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+        fig.add_scatter(x=timestamps, y=export_prices_kwh, name="Export price",
+                        line=dict(color=viz.ASSET_COLORS["battery"][1], dash="dash"), line_shape="hv",
+                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+        return viz.style(fig, "price/kWh")
     if asset_type == "pv":
-        return viz.area_chart(timestamps, payload["power_forecast"], "PV power forecast", viz.ORANGE)
+        return viz.area_chart(timestamps, payload["power_forecast"], "PV power forecast", viz.ASSET_COLORS["pv"][0], unit="W")
     if asset_type == "base_load":
-        return viz.area_chart(timestamps, payload["power_forecast"], "Base load forecast", viz.BLUE)
+        return viz.area_chart(timestamps, payload["power_forecast"], "Base load power forecast", viz.ASSET_COLORS["base_load"][0], unit="W")
     if asset_type == "ev_battery" and generic is not None:
-        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "EV energy demand", viz.PURPLE)
+        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "EV energy demand forecast", viz.ASSET_COLORS["ev_battery"][0], unit="Wh")
     if asset_type == "dhw_tank" and generic is not None:
-        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "DHW energy demand", "#6baed6")
+        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "DHW energy demand forecast", viz.ASSET_COLORS["dhw_tank"][1], unit="Wh")
     return None
 
 
 def render_asset(asset: dict) -> tuple[dict, object]:
-    """Render one asset expander and return its payload and generic object."""
+    """Render one asset expander with three columns: Physical, Generic, and Forecast inputs, then chart below."""
     t = asset["type"]
     info = ASSET_TYPES[t]
     with st.expander(f"{info['icon']} {asset['name']}", expanded=False):
-        left, right = st.columns(2)
-        with left:
+        # Asset name input
+        asset["name"] = st.text_input("Name", asset["name"], key=f"{asset['id']}_name")
+        
+        # Create three columns
+        cols = st.columns(3)
+        
+        # First pass: render physical and forecast inputs to collect data
+        with cols[0]:
             st.markdown("**Physical inputs**")
-            asset["name"] = st.text_input("Name", asset["name"], key=f"{asset['id']}_name")
             physical = render_fields(asset["id"], PHYSICAL_FIELDS[t])
+        
         forecast: dict = {}
-        if t in FORECAST_FIELDS:
-            st.markdown("**Forecast**")
-            cols = st.columns(2)
-            with cols[0]:
+        with cols[2]:
+            st.markdown("**Forecast inputs**")
+            if t in FORECAST_FIELDS:
                 forecast = render_fields(asset["id"], FORECAST_FIELDS[t])
-
+            else:
+                st.caption("No forecast inputs for this asset")
+        
+        # Build payload and generic with collected data
         payload = build_payload(asset, physical, forecast)
         generic = None
         try:
             generic = to_generic(t, payload)
         except (ValueError, KeyError, ZeroDivisionError) as e:
-            with right:
-                st.warning(f"Cannot convert inputs: {e}")
-        if generic is not None:
-            with right:
-                st.markdown("**Generic inputs**")
-                st.json({k: v for k, v in dataclasses.asdict(generic).items() if not isinstance(v, list)})
-
+            st.warning(f"Cannot convert inputs: {e}")
+        
+        # Render generic inputs in middle column
+        with cols[1]:
+            st.markdown("**Generic inputs**")
+            if generic is not None:
+                st.json(dataclasses.asdict(generic), expanded=False)
+        
+        # Forecast chart full width below the columns
         if t in FORECAST_FIELDS:
-            fig = forecast_chart(t, payload, generic)
+            fig = forecast_chart(t, payload, generic, forecast)
             if fig is not None:
-                with cols[1]:
-                    viz.show(fig)
-
+                viz.show(fig)
+        
+        # Remove button
         if st.button("Remove asset", key=f"{asset['id']}_remove"):
             remove_asset(asset["id"])
             st.rerun()
+    
     return payload, generic
 
 
@@ -375,25 +395,31 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_inputs, tab_opt = st.tabs(["📥 Inputs", "📊 Optimization"])
+tab_inputs, tab_opt = st.tabs(["📥 Inputs", "📊 Optimization results"])
 
 entries: list[tuple[dict, dict, object]] = []
 with tab_inputs:
+    st.markdown("**Add new assets**")
     present = {a["type"] for a in st.session_state.assets}
-    options = [t for t, i in ASSET_TYPES.items() if not (i["single"] and t in present)]
-    with st.popover("+ Add asset"):
-        if options:
-            new_type = st.selectbox(
-                "Asset type", options, format_func=lambda t: f"{ASSET_TYPES[t]['icon']} {ASSET_TYPES[t]['label']}"
-            )
-            if st.button("Add", type="primary"):
-                add_asset(new_type)
-                st.rerun()
-        else:
-            st.caption("All asset types are added.")
+    all_options = list(ASSET_TYPES.keys())
+    
+    # Create rows of + buttons for each asset type
+    cols_per_row = 4
+    rows = [all_options[i:i+cols_per_row] for i in range(0, len(all_options), cols_per_row)]
+    for row in rows:
+        cols = st.columns(len(row))
+        for col, asset_type in zip(cols, row):
+            with col:
+                info = ASSET_TYPES[asset_type]
+                # Disable button if this is a single-instance asset and it's already added
+                is_disabled = info["single"] and asset_type in present
+                if st.button(f"+ {info['icon']} {info['label']}", 
+                            key=f"add_{asset_type}", use_container_width=True, disabled=is_disabled):
+                    add_asset(asset_type)
+                    st.rerun()
 
     if not st.session_state.assets:
-        st.info("No assets added yet. Use '+ Add asset' to start.")
+        st.info("No assets added yet. Use the + buttons above to start.")
     for asset in list(st.session_state.assets):
         if asset["enabled"]:
             payload, generic = render_asset(asset)
@@ -412,11 +438,10 @@ with tab_opt:
     else:
         data, ts, dt = result["data"], result["timestamps"], result["step_h"]
         st.subheader("Solver info")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Type", "MILP (CBC)")
-        c2.metric("Status", data["status"])
-        c3.metric("Solve time", f"{result['solve_time']:.2f} s")
-        c4.metric("Objective cost", f"{data['objective_cost']:.2f}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Status", data["status"])
+        c2.metric("Solve time", f"{result['solve_time']:.2f} s")
+        c3.metric("Objective cost", f"{data['objective_cost']:.2f}")
 
         if data["status"] == "Infeasible":
             st.warning("No feasible schedule exists for the given constraints.")
@@ -430,12 +455,12 @@ with tab_opt:
 
             net_grid = schedule[result["grid_id"]]
 
-            st.subheader("Power flow")
+            st.subheader("Power Flow")
             viz.show(viz.power_flow_chart(
                 ts, home_load, result["storage_ids"], schedule, net_grid, result["pv"],
                 result["import_price"], result["export_price"],
             ))
-            st.subheader("Cost analysis")
+            st.subheader("Cost Analysis")
             viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt))
-            st.subheader("State of charge trajectories")
+            st.subheader("State of Charge Trajectories")
             viz.show(viz.soc_chart(ts, result["storage_ids"], soc, generics))

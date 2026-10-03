@@ -1,4 +1,4 @@
-"""HTTP API for Kairos, implementing openapi.yaml."""
+"""Pure AI: HTTP API for Kairos, implementing openapi.yaml."""
 
 from __future__ import annotations
 

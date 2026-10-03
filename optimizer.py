@@ -1,4 +1,4 @@
-"""Kairos optimizer (see backend_architecture.md, section "Optimizer").
+"""Manually checked: Kairos optimizer (see backend_architecture.md, section "Optimizer").
 
 The module follows the structure of the architecture document:
 
