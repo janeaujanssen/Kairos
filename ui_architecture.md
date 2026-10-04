@@ -106,21 +106,21 @@ Shows "Optimizing..." banner while the optimization is in progress.
 
 ### Charts
 **Power Flow** — Hybrid chart showing power balance:
-- Supply side (lines): 
+- Supply side (steplines middle aligned `line_shape="hvh"`): 
   - Net Grid Power
   - PV Production
 - Demand side (stacked bars, barmode="relative"):
   - Home Load
   - Controllable Load
   - Storage Power per asset
-- Secondary y-axis: Import/Export prices [price/kWh] (dashed)
+- Secondary y-axis: Import/Export prices [price/kWh] (lines solid `line_shape="spline"`)
 
 **Cost Analysis** — Dual-axis hybrid chart:
 - Bars (stacked): Grid energy cost (distinct colors for cost and profit)
-- Line (secondary y-axis): Cumulative cost
+- Line (secondary y-axis): Cumulative cost (steplines `line_shape="hv"`)
 
 **State of Charge Trajectories** — Multi-asset SoC evolution:
-- One line per storage asset (same color as defined in the power chart)
+- One line per storage asset (same color as defined in the power chart, line `line_shape="linear"`)
 - Min/max SoC bounds as horizontal dotted lines (same color as defined in the power chart, labeled on right)
 - Hover shows asset name, SoC %, energy (kWh)
 
@@ -128,14 +128,14 @@ Shows "Optimizing..." banner while the optimization is in progress.
 
 **Chart color scheme**:
 Assets cycle through colors when more assets are added beyond the first ones:
-- ⚡ Grid: #B03827, #E96651, #FDBAAD
-- 🔆 PV: #97540C, #D8790F, #FEBD8A
-- 🏠 Base Load: #1B7576, #45A6A6, #A7D7D7
-- 🔌 Controllable Load: #5f5ea2, #8987ea, #c5c7ff
-- 🔋 Battery: #107959, #15AE81, #81E4BC
-- 💧 DHW Tank: #064F71, #00A0E1, #94D6FF
-- 🏢 Building Thermal Mass: #4F6B7E, #7E99AB, #BECFDB
-- 🚗 EV Battery: #7e5391, #b577d2, #e2bcf5
+- ⚡ Grid: #E96651, #FDBAAD, #B03827
+- 🔆 PV: #D8790F, #FEBD8A, #97540C
+- 🏠 Base Load: #45A6A6, #A7D7D7, #1B7576
+- 🔌 Controllable Load: #8987ea, #c5c7ff, #5f5ea2
+- 🔋 Battery: #15AE81, #81E4BC, #107959
+- 💧 DHW Tank: #00A0E1, #94D6FF, #064F71
+- 🏢 Building Thermal Mass: #7E99AB, #BECFDB, #4F6B7E
+- 🚗 EV Battery: #b577d2, #e2bcf5, #7e5391
 
 For costs:
 - Grid energy cost: cost = #E96651, profit = #15AE81
@@ -145,10 +145,10 @@ For costs:
 - Height: 280–400px
 - Width: Responsive ('stretch')
 - Legend: Horizontal, top-right
-- Hover: x-unified (all traces at a time), including units
+- Hover: x-unified (all traces at a time), indicating time window (e.g. 9:00 - 9:15) and y values including units
 
 **Forecast charts** (Inputs):
-- Import/export price forecast: lines (import red dashed, export green dashed)
+- Import/export price forecast: steplines middle aligned `line_shape="hvh"`
 - PV power forecast: filled area
 - Base load power forecast: filled area
 - EV energy demand forecast: bars (energy per timestep)

@@ -262,31 +262,6 @@ def to_generic(asset_type: str, payload: dict):
     return converter.convert_storage(payload, start, step_h, n_steps)
 
 
-def forecast_chart(asset_type: str, payload: dict, generic, forecast: dict = None) -> go.Figure | None:
-    """Forecast chart for assets that have time-series forecasts."""
-    if asset_type == "grid" and forecast:
-        # Convert prices back from $/Wh to $/kWh for display (multiply by 1000)
-        import_prices_kwh = [p * 1000 for p in payload["import_price_forecast"]]
-        export_prices_kwh = [p * 1000 for p in payload["export_price_forecast"]]
-        fig = go.Figure()
-        fig.add_scatter(x=timestamps, y=import_prices_kwh, name="Import price",
-                        line=dict(color=viz.ASSET_COLORS["grid"][1]), line_shape="hv",
-                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
-        fig.add_scatter(x=timestamps, y=export_prices_kwh, name="Export price",
-                        line=dict(color=viz.ASSET_COLORS["battery"][1], dash="dash"), line_shape="hv",
-                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
-        return viz.style(fig, "price/kWh")
-    if asset_type == "pv":
-        return viz.area_chart(timestamps, payload["power_forecast"], "PV power forecast", viz.ASSET_COLORS["pv"][0], unit="W")
-    if asset_type == "base_load":
-        return viz.area_chart(timestamps, payload["power_forecast"], "Base load power forecast", viz.ASSET_COLORS["base_load"][0], unit="W")
-    if asset_type == "ev_battery" and generic is not None:
-        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "EV energy demand forecast", viz.ASSET_COLORS["ev_battery"][0], unit="Wh")
-    if asset_type == "dhw_tank" and generic is not None:
-        return viz.bar_chart(timestamps, generic.energy_demand_forecast, "DHW energy demand forecast", viz.ASSET_COLORS["dhw_tank"][1], unit="Wh")
-    return None
-
-
 def render_asset(asset: dict) -> tuple[dict, object]:
     """Render one asset expander with three columns: Physical, Generic, and Forecast inputs, then chart below."""
     t = asset["type"]
@@ -327,7 +302,7 @@ def render_asset(asset: dict) -> tuple[dict, object]:
         
         # Forecast chart full width below the columns
         if t in FORECAST_FIELDS:
-            fig = forecast_chart(t, payload, generic, forecast)
+            fig = viz.forecast_chart(t, payload, generic, timestamps, forecast)
             if fig is not None:
                 viz.show(fig)
         

@@ -215,7 +215,7 @@ def add_storage(
         prob += energy[t + 1] >= s.min_soc * s.energy_capacity
         prob += energy[t + 1] <= s.max_soc * s.energy_capacity
 
-    stored_energy_per_step = [energy[t + 1] for t in steps]
+    stored_energy_per_step = [energy[t] for t in range(n_steps + 1)]
     return StorageModel(s, flows, energy[n_steps], eta_value, discharge_benefit, stored_energy_per_step)
 
 

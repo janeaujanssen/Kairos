@@ -145,12 +145,12 @@ components:
           example: 11000.0
         import_price_forecast:
           type: array
-          description: Import price forecast [price/Wh] per time step.
+          description: Import price forecast [price/Wh] per time step. Array has one entry per time step; each entry represents the average price for the period starting at that time step.
           items:
             type: number
         export_price_forecast:
           type: array
-          description: Export price forecast [price/Wh] per time step.
+          description: Export price forecast [price/Wh] per time step. Array has one entry per time step; each entry represents the average price for the period starting at that time step.
           items:
             type: number
 
@@ -174,7 +174,7 @@ components:
           example: 800.0
         power_forecast:
           type: array
-          description: Power generation forecast [W] per time step.
+          description: Power generation forecast [W] per time step. Array has one entry per time step; each entry represents the average power generated during the period starting at that time step.
           items:
             type: number
 
@@ -199,7 +199,7 @@ components:
           example: 450.0
         power_forecast:
           type: array
-          description: Uncontrollable power demand forecast [W] per time step.
+          description: Uncontrollable power demand forecast [W] per time step. Array has one entry per time step; each entry represents the average power consumed during the period starting at that time step.
           items:
             type: number
 
@@ -573,7 +573,7 @@ components:
           example: 1.24
         schedule:
           type: object
-          description: Dictionary mapping asset IDs to their scheduled power [W] for each time step. Includes the grid (+ import, - export), controllable loads and storage assets.
+          description: Dictionary mapping asset IDs to their scheduled power [W] for each time step. Power values represent the average power during the period starting at each time step. Includes the grid (+ import, - export), controllable loads and storage assets. Array has one entry per time step in the horizon.
           additionalProperties:
             type: array
             items:
@@ -584,7 +584,7 @@ components:
             building_thermal_mass: [4800.0, 0.0, -2000.0, 0.0]
         storage_soc:
           type: object
-          description: Dictionary mapping storage asset IDs to their State of Charge (SoC) [-] for each time step (0.0 to 1.0, where 1.0 is fully charged).
+          description: Dictionary mapping storage asset IDs to their State of Charge (SoC) [-] at each time step (0.0 to 1.0, where 1.0 is fully charged). Array has n_steps+1 entries, with index 0 being the initial SoC at the start time, and each subsequent index representing the SoC at the end of that time step.
           additionalProperties:
             type: array
             items:
@@ -727,7 +727,7 @@ components:
           description: True for electrical storage, False for thermal storage.
         energy_demand_forecast:
           type: array
-          description: Forecasted external energy demand [Wh] per time step (e.g., EV driving).
+          description: Forecasted external energy demand [Wh] per time step (e.g., EV driving). Array has one entry per time step; each entry represents the energy demand during the period starting at that time step.
           items:
             type: number
         availability_window:
@@ -817,7 +817,7 @@ components:
           description: True for electrical storage, False for thermal storage.
         energy_demand_forecast:
           type: array
-          description: Forecasted external energy demand [Wh] per time step (e.g., DHW usage).
+          description: Forecasted external energy demand [Wh] per time step (e.g., DHW usage). Array has one entry per time step; each entry represents the energy demand during the period starting at that time step.
           items:
             type: number
         availability_window:
@@ -905,7 +905,7 @@ components:
           description: True for electrical storage, False for thermal storage.
         energy_demand_forecast:
           type: array
-          description: Forecasted external energy demand [Wh] per time step. Not relevant for building thermal mass.
+          description: Forecasted external energy demand [Wh] per time step. Not relevant for building thermal mass. Array has one entry per time step; each entry represents the energy demand during the period starting at that time step.
           items:
             type: number
         availability_window:
