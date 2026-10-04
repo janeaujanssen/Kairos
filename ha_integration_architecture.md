@@ -1,7 +1,7 @@
 # Home Assistant Integration Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** final. This document builds on `backend_architecture.md` (sign convention, asset classes, conversion layer, optimizer) and `openapi.yaml` (API contract). It describes how Kairos connects to Home Assistant (HA); it does not repeat the optimizer design.
+> **Status:** final. This document builds on `backend_architecture.md` (sign convention, asset classes, conversion layer, optimizer) and `kairos/openapi.yaml` (API contract). It describes how Kairos connects to Home Assistant (HA); it does not repeat the optimizer design.
 
 # Contents
 
@@ -125,7 +125,7 @@ The integration uses `POST /optimize` rather than `/optimize-unified` because it
 
 ## Request
 
-The request body follows `OptimizationRequest` in `openapi.yaml`: `sources`, `loads` and `storage`, where each storage item is one of `HomeBattery`, `EVBattery`, `DHWTank` or `BuildingThermalMass` (discriminated by `storage_type`). Asset `id` values are opaque labels to the App, and the integration uses them to map the schedule back to entities.
+The request body follows `OptimizationRequest` in `kairos/openapi.yaml`: `sources`, `loads` and `storage`, where each storage item is one of `HomeBattery`, `EVBattery`, `DHWTank` or `BuildingThermalMass` (discriminated by `storage_type`). Asset `id` values are opaque labels to the App, and the integration uses them to map the schedule back to entities.
 
 ## Response
 

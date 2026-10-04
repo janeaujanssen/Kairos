@@ -6,3 +6,4 @@ streamlit
 plotly
 pandas
 requests
+supervisor

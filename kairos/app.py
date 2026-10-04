@@ -105,11 +105,11 @@ FORECAST_FIELDS = {
     ],
     "pv": [("peak_power", "Peak power [W]", 5000.0, "num")],
     "base_load": [
-        ("baseline_consumption", "Baseline consumption [W]", 300.0, "num"),
+        ("baseline_consumption", "Baseline consumption [W]", 500.0, "num"),
         ("morning_peak_time", "Morning peak time", time(7, 30), "time"),
         ("evening_peak_time", "Evening peak time", time(19, 0), "time"),
-        ("morning_peak_power", "Morning peak power [W]", 800.0, "num"),
-        ("evening_peak_power", "Evening peak power [W]", 1500.0, "num"),
+        ("morning_peak_power", "Morning peak power [W]", 2300.0, "num"),
+        ("evening_peak_power", "Evening peak power [W]", 3600.0, "num"),
     ],
     "ev_battery": [
         ("vehicle_efficiency", "Vehicle efficiency [km/kWh]", 5.0, "num", "%.2f"),
@@ -118,8 +118,8 @@ FORECAST_FIELDS = {
         ("expected_arrival_time", "Expected arrival time", time(18, 0), "time"),
     ],
     "dhw_tank": [
-        ("morning_peak_energy_demand", "Morning peak energy demand [Wh]", 150.0, "num"),
-        ("evening_peak_energy_demand", "Evening peak energy demand [Wh]", 180.0, "num"),
+        ("morning_peak_energy_demand", "Morning peak energy demand [Wh]", 1500.0, "num"),
+        ("evening_peak_energy_demand", "Evening peak energy demand [Wh]", 1800.0, "num"),
         ("morning_peak_time", "Morning peak time", time(7, 0), "time"),
         ("evening_peak_time", "Evening peak time", time(19, 0), "time"),
     ],
