@@ -40,11 +40,27 @@ class OptimizationRequest(BaseModel):
     storage: list[dict[str, Any]]
 
 
+class GenericOptimizationRequest(OptimizationRequest):
+    """Optimization request whose storage items already use generic parameters."""
+
+
+class SchedulePoint(BaseModel):
+    time: datetime
+    value: float
+
+
+class AssetSchedule(BaseModel):
+    setpoint: float
+    unit: str
+    schedule: list[SchedulePoint]
+    soc_schedule: list[SchedulePoint] | None = None
+
+
 class OptimizationResponse(BaseModel):
     status: str
     objective_cost: float
-    schedule: dict[str, list[float]]
-    storage_soc: dict[str, list[float]]
+    time_step_minutes: float
+    assets: dict[str, AssetSchedule]
 
 
 class HealthResponse(BaseModel):
@@ -73,14 +89,16 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e)) from e
 
-    objective = 0.0 if result.status == "Infeasible" else result.objective_cost
     return OptimizationResponse(
-        status=result.status, objective_cost=objective, schedule=result.schedule, storage_soc=result.storage_soc
+        status=result.status,
+        objective_cost=result.objective_cost,
+        time_step_minutes=result.time_step_minutes,
+        assets=result.assets,
     )
 
 
 # Plain `def` endpoints run in FastAPI's threadpool, so the solver does not block the event loop.
-@app.post("/optimize", response_model=OptimizationResponse)
+@app.post("/optimize", response_model=OptimizationResponse, response_model_exclude_none=True)
 def run_optimization(request: OptimizationRequest) -> OptimizationResponse:
     """Optimize from device-specific physical storage parameters."""
     return _run(
@@ -91,8 +109,8 @@ def run_optimization(request: OptimizationRequest) -> OptimizationResponse:
     )
 
 
-@app.post("/optimize-generic", response_model=OptimizationResponse)
-def run_optimization_generic(request: OptimizationRequest) -> OptimizationResponse:
+@app.post("/optimize-generic", response_model=OptimizationResponse, response_model_exclude_none=True)
+def run_optimization_generic(request: GenericOptimizationRequest) -> OptimizationResponse:
     """Optimize from already converted generic storage parameters."""
     return _run(request, lambda s, _n: converter.convert_generic_storage(s))
 

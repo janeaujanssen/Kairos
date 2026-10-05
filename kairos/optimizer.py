@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pulp
 
@@ -41,12 +41,12 @@ Expr = pulp.LpAffineExpression | float
 
 @dataclass
 class OptimizationResult:
-    """Solver status, total cost and the power schedule per asset, plus SoC for storages."""
+    """Solver status, total cost and timestamped schedules for each asset."""
 
     status: str
     objective_cost: float
-    schedule: dict[str, list[float]]  # asset id -> power setpoint [W] per step
-    storage_soc: dict[str, list[float]]  # asset id -> SoC (State of Charge) [-] per step
+    time_step_minutes: float
+    assets: dict[str, dict]
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,9 @@ def optimize(
     time_limit_s: int = 60,
 ) -> OptimizationResult:
     """Build and solve the MILP, returning the cheapest schedule over the horizon."""
+    if start.tzinfo is None or start.utcoffset() is None:
+        raise ValueError("start timestamp must include a timezone offset")
+
     dt = step_hours
     prob = pulp.LpProblem("kairos", pulp.LpMinimize)
 
@@ -330,19 +333,39 @@ def optimize(
 
     status = pulp.LpStatus[prob.status]
     if status == "Infeasible":
-        return OptimizationResult("Infeasible", float("nan"), {}, {})
-    if status != "Optimal":
+        return OptimizationResult("Infeasible", 0.0, step_hours * 60, {})
+    if status != "Optimal" and prob.sol_status != pulp.LpSolutionIntegerFeasible:
         raise RuntimeError(f"Solver ended with status {status!r}")
 
-    storage_soc = {
-        m.storage.id: [float(pulp.value(e)) / m.storage.energy_capacity for e in m.stored_energy_per_step]
-        for m in storage_models
-    }
+    assets = {}
+    for asset_id, values in schedule.items():
+        power_schedule = [
+            {
+                "time": (start + timedelta(hours=i * step_hours)).isoformat(),
+                "value": value,
+            }
+            for i, value in enumerate(float(pulp.value(value)) for value in values)
+        ]
+        assets[asset_id] = {
+            "setpoint": power_schedule[0]["value"],
+            "unit": "W",
+            "schedule": power_schedule,
+        }
+
+    for model in storage_models:
+        assets[model.storage.id]["soc_schedule"] = [
+            {
+                "time": (start + timedelta(hours=(i + 1) * step_hours)).isoformat(),
+                "value": float(pulp.value(energy)) / model.storage.energy_capacity,
+            }
+            for i, energy in enumerate(model.stored_energy_per_step[1:])
+        ]
+
     return OptimizationResult(
-        status="Optimal",
+        status="Optimal" if status == "Optimal" else "Feasible",
         objective_cost=float(pulp.value(cost)),
-        schedule={k: [float(pulp.value(x)) for x in v] for k, v in schedule.items()},
-        storage_soc=storage_soc,
+        time_step_minutes=step_hours * 60,
+        assets=assets,
     )
 
 

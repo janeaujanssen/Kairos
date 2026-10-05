@@ -560,8 +560,8 @@ components:
       required:
         - status
         - objective_cost
-        - schedule
-        - storage_soc
+        - time_step_minutes
+        - assets
       properties:
         status:
           type: string
@@ -571,28 +571,56 @@ components:
           type: number
           description: Evaluated total objective cost over the planning horizon.
           example: 1.24
+        time_step_minutes:
+          type: number
+          description: Duration of each scheduled interval in minutes.
+          example: 15
+        assets:
+          type: object
+          description: Schedules keyed by asset ID. Power schedule times mark interval starts; storage SoC schedule times mark interval ends.
+          additionalProperties:
+            $ref: '#/components/schemas/AssetSchedule'
+
+    AssetSchedule:
+      type: object
+      required:
+        - setpoint
+        - unit
+        - schedule
+      properties:
+        setpoint:
+          type: number
+          description: Power setpoint for the first time step [W], equal to the first schedule value.
+          example: 2500.0
+        unit:
+          type: string
+          enum: [W]
+          example: W
         schedule:
-          type: object
-          description: Dictionary mapping asset IDs to their scheduled power [W] for each time step. Power values represent the average power during the period starting at each time step. Includes the grid (+ import, - export), controllable loads and storage assets. Array has one entry per time step in the horizon.
-          additionalProperties:
-            type: array
-            items:
-              type: number
-          example:
-            home_battery: [2500.0, 2500.0, 0.0, -1500.0]
-            ev_battery: [0.0, 7400.0, 7400.0, 0.0]
-            building_thermal_mass: [4800.0, 0.0, -2000.0, 0.0]
-        storage_soc:
-          type: object
-          description: Dictionary mapping storage asset IDs to their State of Charge (SoC) [-] at each time step (0.0 to 1.0, where 1.0 is fully charged). Array has n_steps+1 entries, with index 0 being the initial SoC at the start time, and each subsequent index representing the SoC at the end of that time step.
-          additionalProperties:
-            type: array
-            items:
-              type: number
-          example:
-            home_battery: [0.50, 0.65, 0.65, 0.45]
-            ev_battery: [0.80, 1.00, 1.00, 0.95]
-            building_thermal_mass: [0.60, 0.60, 0.50, 0.50]
+          type: array
+          description: Scheduled power per time step, timestamped at each interval start.
+          items:
+            $ref: '#/components/schemas/SchedulePoint'
+        soc_schedule:
+          type: array
+          description: Storage SoC normalized from 0.0 (empty) to 1.0 (full), with one point per interval timestamped at each interval end. The current SoC is not included.
+          items:
+            $ref: '#/components/schemas/SchedulePoint'
+
+    SchedulePoint:
+      type: object
+      required:
+        - time
+        - value
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp with timezone offset.
+          example: "2026-10-05T14:00:00+02:00"
+        value:
+          type: number
+          example: 1200.0
 
     # --- HEALTH RESPONSE ---
     HealthResponse:

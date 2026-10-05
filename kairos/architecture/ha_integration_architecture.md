@@ -30,14 +30,14 @@
 **Goals**
 
 - Let a user select the HA entities that represent their energy system and describe their devices, with as little effort as possible.
-- Compute an optimized plan (power setpoints per controllable asset over the planning horizon) with the Kairos optimizer.
-- Expose that plan as HA entities.
+- Compute an optimized schedule (power setpoints per controllable asset over the planning horizon) with the Kairos optimizer.
+- Expose that schedule as HA entities.
 - Provide a dashboard in the App that shows the latest optimization results and their history.
 
 **Non-goals**
 
 - Kairos does **not** send commands to physical devices. How a setpoint is applied is the responsibility of the user, through their own automations.
-- The integration does not ship dashboards or cards. Entity selection relies on HA's native selectors, and result visualization is the job of the App. Users can of course build their own dashboards from the entities exposed by the integration, using the `plan` attribute.
+- The integration does not ship dashboards or cards. Entity selection relies on HA's native selectors, and result visualization is the job of the App. Users can of course build their own dashboards from the entities exposed by the integration, using the `schedule` attribute.
 - Kairos does not depend on any cloud service.
 
 ## Components
@@ -101,10 +101,10 @@ Each cycle (default every 15 minutes):
 1. **Data collection**: The integration reads all entities and forecast attributes.
 2. **API request**: It sends them **unmodified** (plus per-entity hints such as unit and sign) to `POST /optimize`.
 3. **Optimization**: The App runs the conversion layer, solves the MILP, stores the full optimization record (inputs to API and outputs), and returns the optimization results.
-4. **Entity update**: The integration updates the corresponding Home Assistant entities. Each setpoint entity exposes the value for the current optimization timestep as its state, while the complete optimization schedule is available through a `plan` attribute. As time advances, the entity state automatically moves to the next scheduled timestep without requiring a new optimization run.
+4. **Entity update**: The integration updates the corresponding Home Assistant entities. Each setpoint entity exposes the value for the current optimization timestep as its state, while the complete optimization schedule is available through a `schedule` attribute. As time advances, the entity state automatically moves to the next scheduled timestep without requiring a new optimization run.
 5. **Device control**: The user's automations react to the setpoint entities and control the devices.
 
-The next cycle observes the new states of the entities and forecasts. Because optimization is repeated continuously in a receding-horizon fashion, Kairos does not need confirmation that a previous setpoint was executed successfully. The measured state inherently reflects the effect of all previously applied control actions, and any deviation from the plan is corrected during the next optimization run.
+The next cycle observes the new states of the entities and forecasts. Because optimization is repeated continuously in a receding-horizon fashion, Kairos does not need confirmation that a previous setpoint was executed successfully. The measured state inherently reflects the effect of all previously applied control actions, and any deviation from the schedule is corrected during the next optimization run.
 
 Each step is described in detail in [End-to-End Workflow](#end-to-end-workflow).
 
@@ -118,18 +118,18 @@ The API is the only contract between the integration and the App. Everything the
 | Endpoint | Used by | Purpose |
 |---|---|---|
 | `POST /optimize` | Integration, simulation interface | Run an optimization from device-specific physical parameters. The App applies the conversion layer. **This is the endpoint the integration uses.** |
-| `POST /optimize-unified` | Simulation interface, developers | Run an optimization from the unified storage model (Sources, Loads, Storage), skipping the conversion layer. |
+| `POST /optimize-generic` | Simulation interface, developers | Run an optimization from the generic storage model, skipping the physical storage conversion layer. |
 | `GET /health` | Integration, simulation interface | Check the health status of the App. |
 
-The integration uses `POST /optimize` rather than `/optimize-unified` because it knows nothing about devices: it passes physical parameters through, and the conversion layer stays in the App, the only place that knows how to convert them.
+The integration uses `POST /optimize` rather than `/optimize-generic` because it passes device-specific storage parameters through, and the conversion layer stays in the App, the only place that knows how to convert them.
 
 ## Request
 
-The request body follows `OptimizationRequest` in `kairos/openapi.yaml`: `sources`, `loads` and `storage`, where each storage item is one of `HomeBattery`, `EVBattery`, `DHWTank` or `BuildingThermalMass` (discriminated by `storage_type`). Asset `id` values are opaque labels to the App, and the integration uses them to map the schedule back to entities.
+The `POST /optimize` request follows `OptimizationRequest` in `kairos/openapi.yaml`: it contains `timestamp`, `time_step_duration_hours`, `horizon_hours`, `grid`, optional `pv`, `base_load`, optional `controllable_loads`, and `storage`. Each storage item uses physical parameters for `HomeBattery`, `EVBattery`, `DHWTank` or `BuildingThermalMass`, discriminated by `storage_type`. Asset `id` values are opaque labels to the App, and the integration uses them to map the response back to entities. `/optimize-generic` uses the same top-level fields with generic storage parameters.
 
 ## Response
 
-The response follows `OptimizationResponse`: `status` (`Optimal`, `Feasible`, `Infeasible`), `objective_cost`, and `schedule`, a dictionary from asset `id` to a list of power setpoints in W, one per time step. The schedule follows the backend sign convention. Only controllable assets appear in the schedule (storage and controllable loads). Grid and PV are not controllable and have no setpoint.
+The response follows `OptimizationResponse`: `status`, `objective_cost`, `time_step_minutes`, and `assets` keyed by asset ID. Each asset contains a `setpoint`, `unit`, and timestamped `schedule` of `{time, value}` points; storage assets also contain `soc_schedule`, with one end-of-interval point per time step (the current SoC is not included). Power values follow the backend sign convention. The optimizer returns schedules for the grid, storage, and active controllable loads; PV and base load are inputs, not scheduled assets.
 
 # End-to-End Workflow
 ## Configuration
@@ -311,9 +311,9 @@ The integration reads `status` first:
 |---|---|
 | `Optimal` | Apply the schedule. |
 | `Feasible` | Apply the schedule (valid but not proven optimal, e.g. solver time limit reached). The status is visible on the diagnostic sensor. |
-| `Infeasible` | Do not apply. Keep following the previous plan and count the cycle as failed. |
+| `Infeasible` | Do not apply. Keep following the previous schedule and count the cycle as failed. |
 
-For an applied schedule, `schedule[asset_id][k]` is the setpoint in W for the interval starting at `start_time + k × time_step_duration_hours`. The integration stores the plan in memory and persists it with HA's storage helper, so a restart does not lose it.
+For an applied schedule, `assets[asset_id].schedule[k].value` is the setpoint in W for the interval starting at `assets[asset_id].schedule[k].time`. The response also provides the immediate `setpoint`, `unit`, and `time_step_minutes`; storage assets include an end-of-interval `soc_schedule` with one point per time step (excluding the current SoC). The integration stores the schedule in memory and persists it with HA's storage helper, so a restart does not lose it.
 
 ## Entity Updates
 
@@ -321,16 +321,16 @@ Every controllable asset in the schedule gets a **setpoint sensor**. The integra
 
 | Entity | State | Attributes |
 |---|---|---|
-| `sensor.kairos_<asset>_setpoint` | Setpoint for the current time step [W], following the backend sign convention (storage: + charge, − discharge; loads ≥ 0) | `plan`, `time_step_minutes`, `optimization_id`, `optimized_at` |
+| `sensor.kairos_<asset>_setpoint` | Setpoint for the current time step [W], following the backend sign convention (storage: + charge, − discharge; loads ≥ 0) | `schedule`, `time_step_minutes`, `optimization_id`, `optimized_at` |
 | `sensor.kairos_<asset>_mode` (building thermal mass only) | `charge` (+dT), `neutral` (0), `discharge` (−dT) | same as above |
 | `sensor.kairos_status` (diagnostic) | `optimal`, `feasible`, `infeasible`, `error` | `last_run`, `duration`, `consecutive_failures` |
 | `sensor.kairos_objective_cost` (diagnostic) | Objective cost of the latest optimization | `optimization_id` |
 
-The `plan` attribute is a list of `{ "start": <ISO 8601 timestamp>, "value": <W> }` entries covering the whole horizon, so a user can chart or template against it.
+The `schedule` attribute is a list of `{ "time": <ISO 8601 timestamp>, "value": <W> }` entries covering the whole horizon, so a user can chart or template against it.
 
 The building thermal mass is controlled through a heat pump temperature offset rather than a power level. Its setpoint sensor still carries the planned power in W, but the **mode** sensor is the one automations should use: a positive value maps to `charge`, a negative value to `discharge`, and zero to `neutral`.
 
-**Advancing through the plan.** The integration runs a step clock aligned to the time-step grid. At each boundary it sets the state of every setpoint entity to the next plan value, without calling the App. A new optimization replaces the stored plan whenever one completes. If the plan runs out (the App has been unreachable for the whole horizon), the setpoint entities become `unavailable`, so automations never act on an expired plan.
+**Advancing through the schedule.** The integration runs a step clock aligned to the time-step grid. At each boundary it sets the state of every setpoint entity to the next scheduled value, without calling the App. A new optimization replaces the stored schedule whenever one completes. If the schedule runs out (the App has been unreachable for the whole horizon), the setpoint entities become `unavailable`, so automations never act on an expired schedule.
 
 ## Device Control
 
@@ -377,17 +377,17 @@ Good practice for these automations:
 
 # Failure Handling
 
-The guiding principle is that a failed cycle never produces a bad setpoint. The integration keeps following the last valid plan until it expires, and surfaces the problem instead of hiding it.
+The guiding principle is that a failed cycle never produces a bad setpoint. The integration keeps following the last valid schedule until it expires, and surfaces the problem instead of hiding it.
 
 | Situation | Integration behavior |
 |---|---|
-| App unreachable or request timeout | Skip the cycle, keep following the current plan, retry next cycle. Raise an HA repair issue after the configured number of consecutive failures. |
-| `400` from the API | Do not retry the same payload. Log the error detail from the response, raise a repair issue pointing at the configuration, keep the current plan. |
-| `Infeasible` status | Keep the current plan, count the cycle as failed. |
+| App unreachable or request timeout | Skip the cycle, keep following the current schedule, retry next cycle. Raise an HA repair issue after the configured number of consecutive failures. |
+| `400` from the API | Do not retry the same payload. Log the error detail from the response, raise a repair issue pointing at the configuration, keep the current schedule. |
+| `Infeasible` status | Keep the current schedule, count the cycle as failed. |
 | Required entity `unavailable` or `unknown` | Skip the cycle without sending partial data. The repair issue names the entity. |
 | Optional forecast missing | Send the request without it. The App holds the current value constant. |
-| Plan exhausted | Setpoint entities become `unavailable`. |
-| HA restart | Restore the persisted plan, resume the step clock, and run a cycle immediately. |
+| Schedule exhausted | Setpoint entities become `unavailable`. |
+| HA restart | Restore the persisted schedule, resume the step clock, and run a cycle immediately. |
 | App restart | No action needed. Each request is self-contained, and stored records persist on the App's data volume. |
 
 Repair issues clear themselves as soon as a cycle succeeds.

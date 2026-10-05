@@ -350,12 +350,18 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         st.session_state.result = {"error": f"API error {response.status_code}: {response.text}"}
         return
 
+    optimization_response = response.json()
+    grid_id = grid[0][0]["id"]
+    result_timestamps = [
+        datetime.fromisoformat(point["time"])
+        for point in optimization_response["assets"].get(grid_id, {}).get("schedule", [])
+    ] or timestamps
     pv_total = [sum(vals) for vals in zip(*(p["power_forecast"] for _, p, _ in by_type("pv")))] or [0.0] * n_steps
     st.session_state.result = {
-        "data": response.json(),
+        "data": optimization_response,
         "solve_time": elapsed,
-        "timestamps": timestamps,
-        "step_h": step_h,
+        "timestamps": result_timestamps,
+        "step_h": optimization_response["time_step_minutes"] / 60,
         "import_price": grid[0][1]["import_price_forecast"],
         "export_price": grid[0][1]["export_price_forecast"],
         "base_load": base_load[0][1]["power_forecast"],
@@ -421,7 +427,16 @@ with tab_opt:
         if data["status"] == "Infeasible":
             st.warning("No feasible schedule exists for the given constraints.")
         else:
-            schedule, soc = data["schedule"], data["storage_soc"]
+            assets = data["assets"]
+            schedule = {
+                asset_id: [point["value"] for point in asset["schedule"]]
+                for asset_id, asset in assets.items()
+            }
+            soc = {
+                asset_id: [point["value"] for point in asset["soc_schedule"]]
+                for asset_id, asset in assets.items()
+                if "soc_schedule" in asset
+            }
             generics = result["generics"]
             controllable = [
                 sum(vals) for vals in zip(*(schedule[i] for i in result["controllable_ids"] if i in schedule))
@@ -429,6 +444,14 @@ with tab_opt:
             home_load = [b + c for b, c in zip(result["base_load"], controllable)]
 
             net_grid = schedule[result["grid_id"]]
+            soc_timestamps = next(
+                (
+                    [datetime.fromisoformat(point["time"]) for point in assets[storage_id]["soc_schedule"]]
+                    for storage_id in result["storage_ids"]
+                    if storage_id in assets and "soc_schedule" in assets[storage_id]
+                ),
+                [],
+            )
 
             st.subheader("Power Flow")
             viz.show(viz.power_flow_chart(
@@ -438,4 +461,4 @@ with tab_opt:
             st.subheader("Cost Analysis")
             viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt))
             st.subheader("State of Charge Trajectories")
-            viz.show(viz.soc_chart(ts, result["storage_ids"], soc, generics))
+            viz.show(viz.soc_chart(soc_timestamps, result["storage_ids"], soc, generics))

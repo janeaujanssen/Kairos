@@ -500,39 +500,65 @@ The total cost of the optimal or best-found schedule [price units], representing
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t}) - \text{Remaining Storage Value}_{T}$$
 
-### Power Schedule
-A dictionary mapping each asset ID to its optimal power setpoint for each time step [W]. This includes:
-- **Grid**: Net grid power at each time step. Positive values indicate import, negative values indicate export.
-- **Controllable loads**: Scheduled power consumption (typically 0 or the average load power during operation window).
-- **Storage assets** (batteries, DHW, building thermal mass): Scheduled electrical power at each time step. Positive values indicate charging, negative values indicate discharging.
+### Asset Schedules
 
-Example:
+The optimizer returns a dictionary of assets keyed by asset ID. Each asset contains:
+
+- `setpoint`: The power setpoint for the first time step [W]. This is the value that can be applied immediately and exposed as the Home Assistant entity state.
+- `unit`: The unit of the power values, currently `W`.
+- `schedule`: The scheduled power for each time step as timestamped `{time, value}` objects, with `time` marking the start of the time step. Timestamps use ISO 8601 with a timezone offset. Values use the sign convention defined for the asset class: grid import is positive and export is negative; storage charging is positive and discharging is negative; controllable load consumption is non-negative.
+- `soc_schedule`: For storage assets, timestamped SoC values normalized from 0.0 (empty) to 1.0 (full). Each `time` marks the end of the time step at which the SoC is reached. The current SoC is not included, so the series has one point per time step.
+
+The `setpoint` equals the first value in `schedule`. Home Assistant can expose it as the entity state and copy the schedule data to entity attributes, making it directly usable by chart cards that consume timestamped series.
+
+For each storage asset $s$ at each time step $t$:
+
+
+
+Example response:
 ```json
 {
-  "grid_1": [1200.0, 3900.0, 7400.0, -300.0],
-  "home_battery": [2500.0, 2500.0, 0.0, -1500.0],
-  "ev_battery": [0.0, 7400.0, 7400.0, 0.0],
-  "dishwasher": [1500.0, 1500.0, 0.0, 0.0]
-}
-```
-
-### Storage State of Charge (SoC)
-A dictionary mapping each storage asset ID to its State of Charge at the end of each time step [-]. SoC values range from 0.0 (empty) to 1.0 (fully charged), representing the normalized energy stored relative to the asset's energy capacity.
-
-Mathematically, for each storage asset $s$ at each time step $t$:
-
-$$\text{SoC}_{s,t} = \frac{\text{Energy}_{s,t}}{C_s}$$
-
-where:
-- $\text{Energy}_{s,t}$ is the stored energy [Wh] at the end of time step $t$.
-- $C_s$ is the energy capacity [Wh] of storage asset $s$.
-
-Example:
-```json
-{
-  "home_battery": [0.50, 0.65, 0.65, 0.45],
-  "ev_battery": [0.80, 1.00, 1.00, 0.95],
-  "dhw_tank": [0.60, 0.60, 0.50, 0.50]
+  "status": "Optimal",
+  "objective_cost": 0.42,
+  "time_step_minutes": 15,
+  "assets": {
+    "grid_1": {
+      "setpoint": 1200.0,
+      "unit": "W",
+      "schedule": [
+        { "time": "2026-10-05T14:00:00+02:00", "value": 1200.0 },
+        { "time": "2026-10-05T14:15:00+02:00", "value": 3900.0 },
+        { "time": "2026-10-05T14:30:00+02:00", "value": 7400.0 },
+        { "time": "2026-10-05T14:45:00+02:00", "value": -300.0 }
+      ]
+    },
+    "home_battery": {
+      "setpoint": 2500.0,
+      "unit": "W",
+      "schedule": [
+        { "time": "2026-10-05T14:00:00+02:00", "value": 2500.0 },
+        { "time": "2026-10-05T14:15:00+02:00", "value": 2500.0 },
+        { "time": "2026-10-05T14:30:00+02:00", "value": 0.0 },
+        { "time": "2026-10-05T14:45:00+02:00", "value": -1500.0 }
+      ],
+      "soc_schedule": [
+        { "time": "2026-10-05T14:15:00+02:00", "value": 0.50 },
+        { "time": "2026-10-05T14:30:00+02:00", "value": 0.65 },
+        { "time": "2026-10-05T14:45:00+02:00", "value": 0.65 },
+        { "time": "2026-10-05T15:00:00+02:00", "value": 0.45 }
+      ]
+    },
+    "dishwasher": {
+      "setpoint": 1500.0,
+      "unit": "W",
+      "schedule": [
+        { "time": "2026-10-05T14:00:00+02:00", "value": 1500.0 },
+        { "time": "2026-10-05T14:15:00+02:00", "value": 1500.0 },
+        { "time": "2026-10-05T14:30:00+02:00", "value": 0.0 },
+        { "time": "2026-10-05T14:45:00+02:00", "value": 0.0 }
+      ]
+    }
+  }
 }
 ```
 
