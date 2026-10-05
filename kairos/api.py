@@ -81,9 +81,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         loads = [converter.convert_base_load(request.base_load)]
         loads += [converter.convert_controllable_load(l) for l in request.controllable_loads]
         storage = [storage_converter(s, n_steps) for s in request.storage]
-        result = optimizer.optimize(
-            sources, loads, storage, request.timestamp, request.time_step_duration_hours, n_steps
-        )
+        result = optimizer.optimize(sources=sources, loads=loads, storage=storage, timestamp=request.timestamp, time_step_duration_hours=request.time_step_duration_hours, n_steps=n_steps)
     except KeyError as e:
         raise HTTPException(400, f"Missing field: {e.args[0]}") from e
     except (ValueError, TypeError) as e:
