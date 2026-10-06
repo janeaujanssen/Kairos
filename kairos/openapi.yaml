@@ -46,6 +46,21 @@ paths:
         '400':
           description: Invalid request payload.
 
+  /optimizations/latest:
+    get:
+      summary: Get Latest Optimization
+      description: Returns the latest completed optimization and its original inputs. The record is held in memory and is cleared when the API process restarts.
+      operationId: getLatestOptimization
+      responses:
+        '200':
+          description: Latest optimization record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestOptimizationRecord'
+        '404':
+          description: No optimization has completed since the API started.
+
   /health:
     get:
       summary: Health Check
@@ -580,6 +595,38 @@ components:
           description: Schedules keyed by asset ID. Power schedule times mark interval starts; storage SoC schedule times mark interval ends.
           additionalProperties:
             $ref: '#/components/schemas/AssetSchedule'
+
+    LatestOptimizationRecord:
+      type: object
+      required:
+        - request
+        - response
+        - completed_at
+        - solve_time_seconds
+        - storage_metadata
+      properties:
+        request:
+          type: object
+          description: Original optimization request.
+        response:
+          $ref: '#/components/schemas/OptimizationResponse'
+        completed_at:
+          type: string
+          format: date-time
+        solve_time_seconds:
+          type: number
+        storage_metadata:
+          type: object
+          description: Storage capacity and SoC bounds needed by the dashboard.
+          additionalProperties:
+            type: object
+            properties:
+              energy_capacity:
+                type: number
+              min_soc:
+                type: number
+              max_soc:
+                type: number
 
     AssetSchedule:
       type: object

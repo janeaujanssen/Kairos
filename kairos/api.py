@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
@@ -16,6 +18,7 @@ import converter
 import optimizer
 
 app = FastAPI(title="Kairos Energy Optimization API", version="1.0.0")
+app.state.latest_optimization = None
 
 
 def _load_openapi() -> dict[str, Any]:
@@ -67,6 +70,14 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class LatestOptimizationResponse(BaseModel):
+    request: dict[str, Any]
+    response: OptimizationResponse
+    completed_at: datetime
+    solve_time_seconds: float
+    storage_metadata: dict[str, dict[str, float]]
+
+
 @app.exception_handler(RequestValidationError)
 def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
     """The API contract uses 400 (not FastAPI's default 422) for invalid payloads."""
@@ -74,6 +85,7 @@ def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONRes
 
 
 def _run(request: OptimizationRequest, storage_converter) -> OptimizationResponse:
+    started_at = perf_counter()
     n_steps = round(request.horizon_hours / request.time_step_duration_hours)
     try:
         sources = [converter.convert_grid(request.grid)]
@@ -87,12 +99,27 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e)) from e
 
-    return OptimizationResponse(
+    response = OptimizationResponse(
         status=result.status,
         objective_cost=result.objective_cost,
         time_step_minutes=result.time_step_minutes,
         assets=result.assets,
     )
+    app.state.latest_optimization = {
+        "request": jsonable_encoder(request),
+        "response": jsonable_encoder(response, exclude_none=True),
+        "completed_at": datetime.now().astimezone(),
+        "solve_time_seconds": perf_counter() - started_at,
+        "storage_metadata": {
+            item.id: {
+                "energy_capacity": item.energy_capacity,
+                "min_soc": item.min_soc,
+                "max_soc": item.max_soc,
+            }
+            for item in storage
+        },
+    }
+    return response
 
 
 # Plain `def` endpoints run in FastAPI's threadpool, so the solver does not block the event loop.
@@ -111,6 +138,18 @@ def run_optimization(request: OptimizationRequest) -> OptimizationResponse:
 def run_optimization_generic(request: GenericOptimizationRequest) -> OptimizationResponse:
     """Optimize from already converted generic storage parameters."""
     return _run(request, lambda s, _n: converter.convert_generic_storage(s))
+
+
+@app.get(
+    "/optimizations/latest",
+    response_model=LatestOptimizationResponse,
+    response_model_exclude_none=True,
+)
+def get_latest_optimization() -> LatestOptimizationResponse:
+    """Return the latest completed optimization and its inputs for dashboard display."""
+    if app.state.latest_optimization is None:
+        raise HTTPException(404, "No optimization has completed yet.")
+    return LatestOptimizationResponse(**app.state.latest_optimization)
 
 
 @app.get("/", include_in_schema=False)

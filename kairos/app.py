@@ -6,6 +6,7 @@ import dataclasses
 import os
 import time as timer
 from datetime import datetime, time, timedelta
+from types import SimpleNamespace
 
 import plotly.graph_objects as go
 import requests
@@ -373,6 +374,54 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
     }
 
 
+def refresh_latest_result() -> None:
+    """Load the latest API optimization into the results view."""
+    try:
+        response = requests.get(f"{API_URL}/optimizations/latest", timeout=10)
+    except requests.RequestException as e:
+        st.session_state.result = {"error": f"API request failed: {e}"}
+        return
+    if response.status_code == 404:
+        st.session_state.result = None
+        return
+    if not response.ok:
+        st.session_state.result = {"error": f"API error {response.status_code}: {response.text}"}
+        return
+
+    latest = response.json()
+    latest_request = latest["request"]
+    latest_response = latest["response"]
+    grid = latest_request["grid"]
+    result_step_hours = latest_response["time_step_minutes"] / 60
+    result_schedule = latest_response["assets"].get(grid["id"], {}).get("schedule", [])
+    result_timestamps = [datetime.fromisoformat(point["time"]) for point in result_schedule]
+    if not result_timestamps:
+        fallback_start = datetime.fromisoformat(latest_request["timestamp"])
+        fallback_steps = round(latest_request["horizon_hours"] / result_step_hours)
+        result_timestamps = [fallback_start + timedelta(hours=i * result_step_hours) for i in range(fallback_steps)]
+
+    pv_forecasts = [asset["power_forecast"] for asset in latest_request.get("pv", [])]
+    pv_total = [sum(values) for values in zip(*pv_forecasts)] if pv_forecasts else []
+    result_steps = len(result_timestamps)
+    st.session_state.result = {
+        "data": latest_response,
+        "solve_time": latest["solve_time_seconds"],
+        "timestamps": result_timestamps,
+        "step_h": result_step_hours,
+        "import_price": grid["import_price_forecast"],
+        "export_price": grid["export_price_forecast"],
+        "base_load": latest_request["base_load"]["power_forecast"],
+        "pv": pv_total or [0.0] * result_steps,
+        "grid_id": grid["id"],
+        "controllable_ids": [item["id"] for item in latest_request.get("controllable_loads", [])],
+        "storage_ids": [item["id"] for item in latest_request.get("storage", [])],
+        "generics": {
+            asset_id: SimpleNamespace(**metadata)
+            for asset_id, metadata in latest["storage_metadata"].items()
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
@@ -411,6 +460,11 @@ if run_clicked:
         run_optimization(entries)
 
 with tab_opt:
+    if st.button("Refresh latest result"):
+        refresh_latest_result()
+    elif st.session_state.result is None:
+        refresh_latest_result()
+
     result = st.session_state.result
     if result is None:
         st.info("No result yet. Click 'Run optimization' in the sidebar.")
