@@ -33,9 +33,6 @@ from classes import (
     Storage,
 )
 
-# Weight of the peak-leveling tie-breaker relative to the average import price.
-PEAK_WEIGHT = 1e-6
-
 Expr = pulp.LpAffineExpression | float
 
 
@@ -70,6 +67,8 @@ class StorageFlows:
     loss: list[Expr]  # energy removed from the store by discharging [Wh]
     electrical_power: list[Expr]  # + charge / - discharge seen by the electrical network [W]
     setpoint: list[Expr]  # power setpoint reported in the schedule [W]
+    c_t: dict[int, pulp.LpVariable]  # charge mode binary per step
+    d_t: dict[int, pulp.LpVariable]  # discharge mode binary per step
     discharged_energy: list[Expr] | None = None  # BTM only, for the discharge benefit [Wh]
 
 
@@ -131,16 +130,20 @@ def add_battery(
     steps = range(n_steps)
     charge = pulp.LpVariable.dicts(f"s{idx}_charge", steps, 0)
     discharge = pulp.LpVariable.dicts(f"s{idx}_discharge", steps, 0)
-    charging = pulp.LpVariable.dicts(f"s{idx}_charging", steps, cat=pulp.LpBinary)
+    c_t = pulp.LpVariable.dicts(f"s{idx}_c", steps, cat=pulp.LpBinary)  # charge mode
+    d_t = pulp.LpVariable.dicts(f"s{idx}_d", steps, cat=pulp.LpBinary)  # discharge mode
     for t in steps:
-        prob += charge[t] <= s.max_charge_power * avail[t] * charging[t]
-        prob += discharge[t] <= s.max_discharge_power * avail[t] * (1 - charging[t])
+        prob += c_t[t] + d_t[t] <= 1  # mutual exclusivity
+        prob += charge[t] <= s.max_charge_power * avail[t] * c_t[t]
+        prob += discharge[t] <= s.max_discharge_power * avail[t] * d_t[t]
     electrical = [charge[t] - discharge[t] for t in steps]
     return StorageFlows(
         gain=[charge[t] * s.charge_efficiency * dt for t in steps],
         loss=[discharge[t] * dt / s.discharge_efficiency for t in steps],
         electrical_power=electrical,
         setpoint=electrical,
+        c_t=c_t,
+        d_t=d_t,
     )
 
 
@@ -149,15 +152,18 @@ def add_dhw(
 ) -> StorageFlows:
     """Heat pump on/off at a discrete electric power; thermal output only via demand."""
     steps = range(n_steps)
-    on = pulp.LpVariable.dicts(f"s{idx}_on", steps, cat=pulp.LpBinary)
+    c_t = pulp.LpVariable.dicts(f"s{idx}_c", steps, cat=pulp.LpBinary)  # on/off (charge mode)
+    d_t = {t: 0 for t in steps}  # no discharge for DHW
     for t in steps:
-        prob += on[t] <= avail[t]
-    electrical = [s.charge_power * on[t] for t in steps]
+        prob += c_t[t] <= avail[t]
+    electrical = [s.charge_power * c_t[t] for t in steps]
     return StorageFlows(
-        gain=[s.charge_power * s.charge_efficiency * dt * on[t] for t in steps],
+        gain=[s.charge_power * s.charge_efficiency * dt * c_t[t] for t in steps],
         loss=[0.0] * n_steps,
         electrical_power=electrical,
         setpoint=electrical,
+        c_t=c_t,
+        d_t=d_t,
     )
 
 
@@ -166,16 +172,18 @@ def add_btm(
 ) -> StorageFlows:
     """Three modes per step: +dT (charge), -dT (discharge), neutral. Only +dT draws extra power."""
     steps = range(n_steps)
-    plus = pulp.LpVariable.dicts(f"s{idx}_plus_dT", steps, cat=pulp.LpBinary)
-    minus = pulp.LpVariable.dicts(f"s{idx}_minus_dT", steps, cat=pulp.LpBinary)
+    c_t = pulp.LpVariable.dicts(f"s{idx}_c", steps, cat=pulp.LpBinary)  # +dT charge mode
+    d_t = pulp.LpVariable.dicts(f"s{idx}_d", steps, cat=pulp.LpBinary)  # -dT discharge mode
     for t in steps:
-        prob += plus[t] + minus[t] <= avail[t]
+        prob += c_t[t] + d_t[t] <= avail[t]
     return StorageFlows(
-        gain=[s.charge_power * s.charge_efficiency * dt * plus[t] for t in steps],
-        loss=[s.discharge_power * dt / s.discharge_efficiency * minus[t] for t in steps],
-        electrical_power=[s.charge_power * plus[t] for t in steps],
-        setpoint=[s.charge_power * plus[t] - s.discharge_power * minus[t] for t in steps],
-        discharged_energy=[s.discharge_power * dt * minus[t] for t in steps],
+        gain=[s.charge_power * s.charge_efficiency * dt * c_t[t] for t in steps],
+        loss=[s.discharge_power * dt / s.discharge_efficiency * d_t[t] for t in steps],
+        electrical_power=[s.charge_power * c_t[t] for t in steps],
+        setpoint=[s.charge_power * c_t[t] - s.discharge_power * d_t[t] for t in steps],
+        c_t=c_t,
+        d_t=d_t,
+        discharged_energy=[s.discharge_power * dt * d_t[t] for t in steps],
     )
 
 
@@ -245,9 +253,41 @@ def remaining_storage_value(models: list[StorageModel], future_price: float) -> 
     return pulp.lpSum(m.remaining_energy * m.eta_value * future_price for m in models)
 
 
-def peak_leveling(model: GridModel, future_price: float) -> Expr:
+def peak_leveling(
+    model: GridModel, future_price: float, penalty_weight: float, dt: float
+) -> Expr:
     """Secondary objective: tiny weight, only breaks ties between equal-cost schedules."""
-    return PEAK_WEIGHT * max(abs(future_price), 1e-9) * model.peak
+    return penalty_weight * max(abs(future_price), 1e-9) * dt * model.peak
+
+
+def storage_mode_switching_penalty(
+    prob: pulp.LpProblem, storage_models: list[StorageModel], n_steps: int, penalty_cost: float
+) -> Expr:
+    """Penalize mode switches for all storage devices to favor longer continuous runs."""
+    if penalty_cost <= 0:
+        return 0.0
+
+    total_penalty = 0.0
+    for idx, m in enumerate(storage_models):
+        c_t = m.flows.c_t
+        d_t = m.flows.d_t
+
+        # Create switch variable for each transition
+        for t in range(n_steps - 1):
+            switch_t = pulp.LpVariable(f"s{idx}_switch_{t}", cat=pulp.LpBinary)
+            # switch_t >= |c_t - c_{t+1}| and switch_t >= |d_t - d_{t+1}|
+            # Linearized as:
+            prob += switch_t >= c_t[t] - c_t[t + 1]
+            prob += switch_t >= c_t[t + 1] - c_t[t]
+            # Handle d_t which might be int or LpVariable
+            d_curr = d_t[t] if isinstance(d_t[t], pulp.LpVariable) else 0
+            d_next = d_t[t + 1] if isinstance(d_t[t + 1], pulp.LpVariable) else 0
+            if isinstance(d_curr, pulp.LpVariable) and isinstance(d_next, pulp.LpVariable):
+                prob += switch_t >= d_curr - d_next
+                prob += switch_t >= d_next - d_curr
+            total_penalty += switch_t * penalty_cost
+
+    return total_penalty
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +317,9 @@ def optimize(
     start: datetime,
     step_hours: float,
     n_steps: int,
-    time_limit_s: int = 60,
+    time_limit_s: int = 10,
+    switching_penalty: float = 0.1,
+    grid_peak_penalty: float = 0.1,
 ) -> OptimizationResult:
     """Build and solve the MILP, returning the cheapest schedule over the horizon."""
     if start.tzinfo is None or start.utcoffset() is None:
@@ -320,14 +362,15 @@ def optimize(
         prob, grid_model, pv_power, base_load_power, controllable_power, storage_power
     )
 
-    # Objective: cost - BTM discharge benefit - remaining storage value, plus tie-breaker.
+    # Objective: cost - BTM discharge benefit - remaining storage value, switching penalty, plus tie-breaker.
     future_price = sum(grid.import_price_forecast) / n_steps
     cost = (
         energy_cost(grid_model, dt)
         - pulp.lpSum(m.discharge_benefit for m in storage_models)
         - remaining_storage_value(storage_models, future_price)
+        + storage_mode_switching_penalty(prob, storage_models, n_steps, switching_penalty)
     )
-    prob += cost + peak_leveling(grid_model, future_price)
+    prob += cost + peak_leveling(grid_model, future_price, grid_peak_penalty, dt)
 
     prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit_s))
 

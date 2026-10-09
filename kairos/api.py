@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import converter
 import optimizer
@@ -36,6 +36,17 @@ class OptimizationRequest(BaseModel):
     timestamp: datetime
     time_step_duration_hours: float
     horizon_hours: float
+    time_limit_s: int = Field(default=10, ge=1, le=3600)
+    switching_penalty: float = Field(default=0.1, ge=0.0)
+    grid_peak_penalty: float = Field(
+        default=0.1,
+        ge=0.0,
+        description=(
+            "Dimensionless grid peak weight. For example, at 0.40 currency/kWh and 15-minute "
+            "steps, a value of 0.1 means the optimizer can accept up to 1 cent higher energy "
+            "cost in exchange for a 1 kW lower grid peak. Set to 0 to disable."
+        ),
+    )
     grid: dict[str, Any]
     pv: list[dict[str, Any]] = []
     base_load: dict[str, Any]
@@ -93,7 +104,17 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         loads = [converter.convert_base_load(request.base_load)]
         loads += [converter.convert_controllable_load(l) for l in request.controllable_loads]
         storage = [storage_converter(s, n_steps) for s in request.storage]
-        result = optimizer.optimize(sources=sources, loads=loads, storage=storage, start=request.timestamp, step_hours=request.time_step_duration_hours, n_steps=n_steps)
+        result = optimizer.optimize(
+            sources=sources,
+            loads=loads,
+            storage=storage,
+            start=request.timestamp,
+            step_hours=request.time_step_duration_hours,
+            n_steps=n_steps,
+            time_limit_s=request.time_limit_s,
+            switching_penalty=request.switching_penalty,
+            grid_peak_penalty=request.grid_peak_penalty,
+        )
     except KeyError as e:
         raise HTTPException(400, f"Missing field: {e.args[0]}") from e
     except (ValueError, TypeError) as e:

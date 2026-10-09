@@ -102,6 +102,28 @@ components:
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
+        time_limit_s:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 3600
+          description: Maximum solver runtime in seconds.
+        switching_penalty:
+          type: number
+          format: float
+          default: 0.1
+          minimum: 0.0
+          description: Cost-equivalent penalty per storage mode change; set to 0 to disable.
+        grid_peak_penalty:
+          type: number
+          format: float
+          default: 0.1
+          minimum: 0.0
+          description: >-
+            Dimensionless weight for the grid import/export peak tie-breaker. For example, at
+            0.40 currency/kWh and 15-minute steps, a value of 0.1 means the optimizer can
+            accept up to 1 cent higher energy cost in exchange for a 1 kW lower grid peak.
+            Set to 0 to disable.
         grid:
           $ref: '#/components/schemas/Grid'
         pv:
@@ -706,6 +728,28 @@ components:
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
+        time_limit_s:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 3600
+          description: Maximum solver runtime in seconds.
+        switching_penalty:
+          type: number
+          format: float
+          default: 0.1
+          minimum: 0.0
+          description: Cost-equivalent penalty per storage mode change; set to 0 to disable.
+        grid_peak_penalty:
+          type: number
+          format: float
+          default: 0.1
+          minimum: 0.0
+          description: >-
+            Dimensionless weight for the grid import/export peak tie-breaker. For example, at
+            0.40 currency/kWh and 15-minute steps, a value of 0.1 means the optimizer can
+            accept up to 1 cent higher energy cost in exchange for a 1 kW lower grid peak.
+            Set to 0 to disable.
         grid:
           $ref: '#/components/schemas/Grid'
         pv:

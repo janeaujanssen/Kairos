@@ -37,6 +37,7 @@ When disabled, the asset will not be considered in the optimization and will als
 - **Planning Horizon** (hours): 6–48, default 24
 - **Time Interval** (minutes): 15, 30, 60; default 15
 - **Start time** [hh:mm]: default 00:00
+- **Solver Time Limit** (seconds): 1–3600, default 10
 
 ## Inputs Tab (📥)
 
@@ -128,18 +129,45 @@ Shows "Optimizing..." banner while the optimization is in progress.
 
 **Chart color scheme**:
 Assets cycle through colors when more assets are added beyond the first ones:
-- ⚡ Grid: #E96651, #FDBAAD, #B03827
-- 🔆 PV: #D8790F, #FEBD8A, #97540C
-- 🏠 Base Load: #45A6A6, #A7D7D7, #1B7576
-- 🔌 Controllable Load: #8987ea, #c5c7ff, #5f5ea2
-- 🔋 Battery: #15AE81, #81E4BC, #107959
-- 💧 DHW Tank: #00A0E1, #94D6FF, #064F71
-- 🏢 Building Thermal Mass: #7E99AB, #BECFDB, #4F6B7E
-- 🚗 EV Battery: #b577d2, #e2bcf5, #7e5391
+https://huetone.ardov.me/?palette=N4IgdghgtgpiBcICiYYCcDmBPABAEwgGcALAIwHsI08QAaEYgVxkIQG1RJYEQ0Yb6AY3IAbcmlbw2IAMQAzBQDY5AFjqyFMAJwwArOvlzBRgBwGFpRREHm5JwQHY49eXl2KVEA3jkAmAIy%2BAAwGpCqB-gDMBiakESEuVkEmyQYqQUGRmSAAugC%2BtJzQcIjiEGAYziDCYhLsGjByWgTmgvykWq1uDp0uRqR4kV59dnJBVTL8ig5Bai6CJiop-gYQJr6CGTEqAUGKBrpy-hBB%2Bi6RkVFBvrkFRdyIGGgQWOo14pLS8somcsOyMFIMEaKxcbjwQNBsk2CzwNxcECGglI-xkJh6QS0cgMinRkRMZ1kuhUui0il6snCJN08NkWUukQEsmO-lIvn0%2BUK4GKPAADow0LyRFV3nUpBpfg4FAZGjBjNiwYI8Co5BNBOqgtKXKRIlpjEyZFpSA4IHJCWiVCo2grZIpBFljAdfL4IFpUZE4nIHLSZL4HZ5blyuCUQKQRMw3qIPvUZHgfJoDPLDvsEb49I0DA5dG4YGYXHsOhn85jFICDKcZngJhldLpSDZ85b8Q3ZBlIr5FD6gv5-PavJz7iGnsCwJHap8ASrVQ5E79rDa0VjMaQDIyYCpFAaMoJFDTy0EIB45q3kipIseZBlcb4Z8XdN2t2e4ubZs6giuB9yHqG0OQAO6jkIUZil8cjKL4YzmKWQK3pOeDNOaeAOIIdYLoILomFiqwLAsCSyFoewQNmmYkueeZEvaciRCmlI7Gy5q%2BHg-gOP4aifsGfIAJZgAA1mO0bivIjTKCufRtL85pmkqMCwfIvhhFWMoOCY1iibISGdsaibei60QIveyQ0TITiGUZ2aYioakyEMGRprcOT0AALuQqATve6j%2BFs9D%2BO59DBHhWR4ekeEGeoiheSAMx4SkeEESE%2BRAA
+
+https://huetone.ardov.me/?palette=N4IgdghgtgpiBcICiYYCcDmBPABAEwgGcALAIwHsI08QAaEYgVxkIQG1RJYERy0IwGOPQDG5ADZ9W8NiADEAMxgKAnATryFImHlIqNikXgCsAdn31DpPAGYIBhQoAcCgAzD5OgGynXAFgMRJz8nVwBGAwgnACYRV1cDYOiw1y8DYwUwiFdjAxsbMJtXaJAAXQBfWk5oOEQMfiwNMUk0aVlFL2cFe0sYUhhlCMsTXRgh%2BTigvBLLCDsRUh75J3NXFQUDLxWbJ1zLYz9jFS8LeT8ww%2BMZ%2BSKCmxpLLLDSaNyKqvAangAHRjRv8QeZpSdiaFymRwGZQwESQ4ZGPxKQIiOJw%2BSkGwqWEPeQqUimCAKPbLPx%2BbQbSxeERFWHpaLRCAqJZyGykMIKUzXOTRGl%2BezvarcRCkcTMJoSEEyeR4PCOJGWWFEhRpWbRGDGZQGUzGEwwJwGVJ6TWWeLHPoGsyuPAeOTxYzGUgiA2knZOk2uGzRLxc8Jhan8yqC2ogeoDMDilptTyIpSmQIuCC0yxOdZrUh5a1%2BLw422uEReK4G1wQLykovBGwBd1baJx93GcI5-yssLE21%2BemudMCz5CkCkNDkADu4dEEtaoI6CmibgcXj6MDr0bwajbeFMIgdFImDJT27kiacQQSlhUqQgOq1h0r%2Bv21IUNhVZw7Lzb0TwYVMFzKgd7we%2BACWYAANYRpK7RKMqCjppYWh6kSDjGEYi4ONEpB%2BNaUKmE4iYwdKpjevigScgyNiRA2rhOE%2BcimDAlFeNROprH4eEstkxRwD2XDBmIhAAC5gROUqKI4nRVpoSgqOqDhaFot4SaQXiJjJR60Q4JilsysrJNEJ7oucyRkcmbLJHpchKZRlEGH48S3D%2BHzcT8g4KABAljpGk7TtBHJQq4Ch%2BOalikP0Ti2AYKgYQueQojAWJFhiThGfIpqpKcuacoW9aJfu8QdmqRZemE%2BgVKU9B8eQqBRg2GgpHprZ6bpelFHpNl6RRGhePEGi%2BHpoR6WeCQVEAA
+- ⚡ Grid (black tints):
+  - #000000
+  - #000000
+  - #000000
+- 🔆 PV (orange tints, 300 / 300 / 300):
+  - #ff8f0e
+  - #ff8f0e
+  - #ff8f0e
+- 🏠 Base Load (gray tints, 500 / 300 / 150):
+  - #687385
+  - #a3acba
+  - #d5dbe1
+- 🔌 Controllable Load (purple tints, 500 / 300 / 150):
+  - #844cef
+  - #b39cfd
+  - #dcd4fe
+- 🔋 Battery (green tints, 500 / 300 / 150):
+  - #008434
+  - #00c652
+  - #89f09b
+- 💧 DHW Tank (blue tints, 500 / 300 / 150):
+  - #0570de
+  - #06b9ef
+  - #a2e5ef
+- 🏢 Building Thermal Mass (brown tints, 500 / 300 / 150):
+  - #906a5d
+  - #c2a89f
+  - #e4d9d5
+- 🚗 EV Battery (pink tints, 500 / 300 / 150):
+  - #c722a3
+  - #e78acb
+  - #f5cde7
 
 For costs:
-- Grid energy cost: cost = #E96651, profit = #15AE81
-- Cumulative cost: #00A0E1
+- Grid energy cost: cost = #ff8c7e (300), profit = #3cce9c (300)
+- Cumulative cost: #0570de
 
 **Global chart properties**:
 - Height: 280–400px

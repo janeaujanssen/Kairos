@@ -198,6 +198,26 @@ with st.sidebar:
     horizon_h = st.number_input("Planning horizon [h]", 6, 48, 24, step=1)
     interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
     start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
+    time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
+    switching_penalty = st.number_input(
+        "Switching penalty [currency units / mode change]",
+        min_value=0.0,
+        value=0.1,
+        step=1.0,
+        help="Softly discourages storage mode changes between timesteps. Set to 0 to disable.",
+    )
+    grid_peak_penalty = st.number_input(
+        "Grid peak penalty",
+        min_value=0.0,
+        value=0.1,
+        step=0.01,
+        format="%.2f",
+        help=(
+            "Dimensionless weight. At 0.40 currency/kWh with 15-minute steps, 0.1 means the "
+            "optimizer can accept up to 1 cent higher energy cost for a 1 kW lower grid peak. "
+            "Set to 0 to disable."
+        ),
+    )
 
 # ---------------------------------------------------------------------------
 # Time context
@@ -263,7 +283,7 @@ def to_generic(asset_type: str, payload: dict):
     return converter.convert_storage(payload, start, step_h, n_steps)
 
 
-def render_asset(asset: dict) -> tuple[dict, object]:
+def render_asset(asset: dict, color_index: int = 0) -> tuple[dict, object]:
     """Render one asset expander with three columns: Physical, Generic, and Forecast inputs, then chart below."""
     t = asset["type"]
     info = ASSET_TYPES[t]
@@ -303,7 +323,7 @@ def render_asset(asset: dict) -> tuple[dict, object]:
         
         # Forecast chart full width below the columns
         if t in FORECAST_FIELDS:
-            fig = viz.forecast_chart(t, payload, generic, timestamps, forecast)
+            fig = viz.forecast_chart(t, payload, generic, timestamps, forecast, color_index)
             if fig is not None:
                 viz.show(fig)
         
@@ -334,6 +354,9 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "timestamp": start.isoformat(),
         "time_step_duration_hours": step_h,
         "horizon_hours": horizon_h,
+        "time_limit_s": time_limit_s,
+        "switching_penalty": switching_penalty,
+        "grid_peak_penalty": grid_peak_penalty,
         "grid": grid[0][1],
         "pv": [p for _, p, _ in by_type("pv")],
         "base_load": base_load[0][1],
@@ -342,7 +365,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
     }
     t0 = timer.perf_counter()
     try:
-        response = requests.post(f"{API_URL}/optimize", json=request, timeout=120)
+        response = requests.post(f"{API_URL}/optimize", json=request, timeout=time_limit_s + 30)
     except requests.RequestException as e:
         st.session_state.result = {"error": f"API request failed: {e}"}
         return
@@ -370,6 +393,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "grid_id": grid[0][0]["id"],
         "controllable_ids": [a["id"] for a, _, _ in by_type("controllable_load")],
         "storage_ids": [a["id"] for a, _, _ in storage],
+        "storage_types_by_id": {a["id"]: a["type"] for a, _, _ in storage},
         "generics": {a["id"]: g for a, _, g in storage},
     }
 
@@ -415,6 +439,9 @@ def refresh_latest_result() -> None:
         "grid_id": grid["id"],
         "controllable_ids": [item["id"] for item in latest_request.get("controllable_loads", [])],
         "storage_ids": [item["id"] for item in latest_request.get("storage", [])],
+        "storage_types_by_id": {
+            item["id"]: item["storage_type"] for item in latest_request.get("storage", [])
+        },
         "generics": {
             asset_id: SimpleNamespace(**metadata)
             for asset_id, metadata in latest["storage_metadata"].items()
@@ -450,9 +477,17 @@ with tab_inputs:
 
     if not st.session_state.assets:
         st.info("No assets added yet. Use the + buttons above to start.")
+    color_counts: dict[str, int] = {}
+    color_indices_by_asset_id = {}
+    for asset in st.session_state.assets:
+        if asset["enabled"]:
+            asset_type = asset["type"]
+            color_indices_by_asset_id[asset["id"]] = color_counts.get(asset_type, 0)
+            color_counts[asset_type] = color_indices_by_asset_id[asset["id"]] + 1
+
     for asset in list(st.session_state.assets):
         if asset["enabled"]:
-            payload, generic = render_asset(asset)
+            payload, generic = render_asset(asset, color_indices_by_asset_id[asset["id"]])
             entries.append((asset, payload, generic))
 
 if run_clicked:
@@ -492,11 +527,6 @@ with tab_opt:
                 if "soc_schedule" in asset
             }
             generics = result["generics"]
-            controllable = [
-                sum(vals) for vals in zip(*(schedule[i] for i in result["controllable_ids"] if i in schedule))
-            ] or [0.0] * len(ts)
-            home_load = [b + c for b, c in zip(result["base_load"], controllable)]
-
             net_grid = schedule[result["grid_id"]]
             soc_timestamps = next(
                 (
@@ -509,10 +539,18 @@ with tab_opt:
 
             st.subheader("Power Flow")
             viz.show(viz.power_flow_chart(
-                ts, home_load, result["storage_ids"], schedule, net_grid, result["pv"],
-                result["import_price"], result["export_price"],
+                ts, result["base_load"], result["storage_ids"], schedule, net_grid, result["pv"],
+                result["import_price"], result["export_price"], result["storage_types_by_id"],
+                result["controllable_ids"],
             ))
             st.subheader("Cost Analysis")
+
+            horizon_cost = sum(viz.grid_step_costs(
+                net_grid, result["import_price"], result["export_price"], dt
+            ))
+            st.metric("Grid energy cost over planning horizon", f"{horizon_cost:.2f}")
             viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt))
             st.subheader("State of Charge Trajectories")
-            viz.show(viz.soc_chart(soc_timestamps, result["storage_ids"], soc, generics))
+            viz.show(viz.soc_chart(
+                soc_timestamps, result["storage_ids"], soc, generics, result["storage_types_by_id"]
+            ))

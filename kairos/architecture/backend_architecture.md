@@ -382,6 +382,31 @@ With
 | Thermal, building thermal mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `default_efficiency` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
 | Electrical (home battery, EV battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
 ---
+### Storage Mode Switching Penalty
+
+To favor longer continuous operating runs, the optimizer uses binary mode variables $c_t$ and $d_t$ for each storage device at each timestep $t$, representing charge and discharge modes respectively. 
+
+$$c_t, d_t \in \{0, 1\}$$
+
+These binaries are shared with the mutual exclusivity constraints (see below). The switching penalty discourages mode changes by penalizing transitions:
+
+$$\text{Switching Penalty} \times \sum_t \text{switch}_t$$
+
+where $\text{switch}_t$ captures any mode transition. Define $\text{switch}_t$ as:
+
+$$\text{switch}_t \geq \max(|c_t - c_{t+1}|, |d_t - d_{t+1}|)$$
+
+Linearized as:
+
+$$\text{switch}_t \geq c_t - c_{t+1}, \quad \text{switch}_t \geq c_{t+1} - c_t$$
+$$\text{switch}_t \geq d_t - d_{t+1}, \quad \text{switch}_t \geq d_{t+1} - d_t$$
+
+This ensures a direct transition from charge to discharge (c: 1→0, d: 0→1) is penalized once, not twice.
+
+The parameter $\text{Switching Penalty}$ is the cost-equivalent penalty per mode change [currency units]. It trades a potentially small increase in energy cost for fewer switches; unlike [secondary objectives](#secondary-objectives), it can change which schedule is optimal. This is a soft preference, not a guaranteed minimum run length—the optimizer will accept switches if the energy cost savings justify them.
+
+When BTM shares a heat pump with DHW (see [Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass](#mutual-exclusivity-of-charging-the-dhw-tank-and-building-thermal-mass)), the shared resource constraint forces unavoidable alternation between DHW and BTM charging; the switching penalty then discourages unnecessary additional switches within a charging or idle phase.
+
 ### Secondary Objectives
 
 In some situations, multiple schedules result in the same total energy cost. For example, when electricity prices are identical over several timesteps, charging a battery now or later may lead to exactly the same objective value.
@@ -392,6 +417,8 @@ To avoid arbitrary solutions, the optimizer applies secondary objectives as tie-
 - Preferring local storage charging over grid export.
 
 These objectives are assigned a much smaller weight than the main cost objective and therefore only influence the solution when multiple schedules have equivalent cost.
+
+The grid peak tie-breaker is computed as `grid_peak_penalty * average_import_price * time_step_duration * grid_peak`. Since the energy-cost term also multiplies power by price per Wh and timestep hours, `grid_peak_penalty` is dimensionless. A value of zero disables this tie-breaker.
 
 ## Optimizer Constraints
 
@@ -446,17 +473,17 @@ This ensures that energy stored in an asset remains physically consistent over t
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
 
-Storage assets cannot simultaneously charge and discharge, enforced via binary variables $z_t, y_t \in \{0, 1\}$ for charging and discharging respectively, with $z_t + y_t \leq 1$. When both are 0 the storage is idle.
+Storage assets cannot simultaneously charge and discharge, enforced via the binary variables $c_t, d_t \in \{0, 1\}$ (defined in [Storage Mode Switching Penalty](#storage-mode-switching-penalty)) for charging and discharging respectively, with $c_t + d_t \leq 1$. When both are 0 the storage is idle.
 
 For a `Battery`, the power is continuous:
 
-$$P_{\text{charge},t} \leq P_{\text{charge}}^{\max} \cdot z_t, \quad P_{\text{discharge},t} \leq P_{\text{discharge}}^{\max} \cdot y_t, \quad z_t + y_t \leq 1$$
+$$P_{\text{charge},t} \leq P_{\text{charge}}^{\max} \cdot c_t, \quad P_{\text{discharge},t} \leq P_{\text{discharge}}^{\max} \cdot d_t, \quad c_t + d_t \leq 1$$
 
 where $P_{\text{charge}}^{\max}$ and $P_{\text{discharge}}^{\max}$ are `max_charge_power` and `max_discharge_power`. This reflects the physical constraint of single-direction power converters.
 
-For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode). With binary $z_{\text{BTM},t}$ for +dT mode (see below) and binary $y_{\text{BTM},t}$ for -dT mode:
+For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode). With binary $c_{\text{BTM},t}$ for +dT mode and binary $d_{\text{BTM},t}$ for -dT mode:
 
-$$P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot z_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot y_{\text{BTM},t}, \quad z_{\text{BTM},t} + y_{\text{BTM},t} \leq 1$$
+$$P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
 
 where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` and `discharge_power`. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
@@ -467,13 +494,15 @@ where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` 
 
 ### Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass
 
-DHW tank and building thermal mass typically share a single heat pump and cannot both charge simultaneously. Binary variables $z_{\text{DHW},t}$ and $z_{\text{BTM},t}$ enforce:
+DHW tank and building thermal mass typically share a single heat pump and cannot both charge simultaneously. This shared resource constraint creates unavoidable mode switches: the optimizer must alternate between charging DHW and precharging BTM based on cost and demand forecasts. The [Storage Mode Switching Penalty](#storage-mode-switching-penalty) can then be tuned to smooth these forced transitions, discouraging unnecessary additional switches within a charging or idle phase.
 
-$$z_{\text{DHW},t} + z_{\text{BTM},t} \leq 1$$
+Binary variables $c_{\text{DHW},t}$ and $c_{\text{BTM},t}$ (the charge binaries from their respective Mutual Exclusivity of Charge and Discharge constraints) enforce:
+
+$$c_{\text{DHW},t} + c_{\text{BTM},t} \leq 1$$
 
 with the discrete charging power defined by:
 
-$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot z_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot z_{\text{BTM},t}$$
+$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot c_{\text{BTM},t}$$
 
 where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes.
 
