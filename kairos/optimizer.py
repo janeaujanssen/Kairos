@@ -34,6 +34,7 @@ from classes import (
 )
 
 Expr = pulp.LpAffineExpression | float
+MIN_STORAGE_MODE_POWER = 300
 
 
 @dataclass
@@ -135,7 +136,9 @@ def add_battery(
     for t in steps:
         prob += c_t[t] + d_t[t] <= 1  # mutual exclusivity
         prob += charge[t] <= s.max_charge_power * avail[t] * c_t[t]
+        prob += charge[t] >= MIN_STORAGE_MODE_POWER * c_t[t]
         prob += discharge[t] <= s.max_discharge_power * avail[t] * d_t[t]
+        prob += discharge[t] >= MIN_STORAGE_MODE_POWER * d_t[t]
     electrical = [charge[t] - discharge[t] for t in steps]
     return StorageFlows(
         gain=[charge[t] * s.charge_efficiency * dt for t in steps],
@@ -156,6 +159,7 @@ def add_dhw(
     d_t = {t: 0 for t in steps}  # no discharge for DHW
     for t in steps:
         prob += c_t[t] <= avail[t]
+        prob += s.charge_power * c_t[t] >= MIN_STORAGE_MODE_POWER * c_t[t]
     electrical = [s.charge_power * c_t[t] for t in steps]
     return StorageFlows(
         gain=[s.charge_power * s.charge_efficiency * dt * c_t[t] for t in steps],
@@ -176,6 +180,8 @@ def add_btm(
     d_t = pulp.LpVariable.dicts(f"s{idx}_d", steps, cat=pulp.LpBinary)  # -dT discharge mode
     for t in steps:
         prob += c_t[t] + d_t[t] <= avail[t]
+        prob += s.charge_power * c_t[t] >= MIN_STORAGE_MODE_POWER * c_t[t]
+        prob += s.discharge_power * d_t[t] >= MIN_STORAGE_MODE_POWER * d_t[t]
     return StorageFlows(
         gain=[s.charge_power * s.charge_efficiency * dt * c_t[t] for t in steps],
         loss=[s.discharge_power * dt / s.discharge_efficiency * d_t[t] for t in steps],
@@ -251,6 +257,12 @@ def building_thermal_discharge_benefit(
 def remaining_storage_value(models: list[StorageModel], future_price: float) -> Expr:
     """Remaining stored energy * eta_value * future import price."""
     return pulp.lpSum(m.remaining_energy * m.eta_value * future_price for m in models)
+
+
+def _terminal_storage_price(import_prices: list[float]) -> float:
+    """Average the cheapest quarter of forecast intervals for terminal storage value."""
+    count = max(1, math.ceil(len(import_prices) * 0.25))
+    return sum(sorted(import_prices)[:count]) / count
 
 
 def peak_leveling(
@@ -363,14 +375,15 @@ def optimize(
     )
 
     # Objective: cost - BTM discharge benefit - remaining storage value, switching penalty, plus tie-breaker.
-    future_price = sum(grid.import_price_forecast) / n_steps
+    average_import_price = sum(grid.import_price_forecast) / n_steps
+    terminal_storage_price = _terminal_storage_price(grid.import_price_forecast)
     cost = (
         energy_cost(grid_model, dt)
         - pulp.lpSum(m.discharge_benefit for m in storage_models)
-        - remaining_storage_value(storage_models, future_price)
+        - remaining_storage_value(storage_models, terminal_storage_price)
         + storage_mode_switching_penalty(prob, storage_models, n_steps, switching_penalty)
     )
-    prob += cost + peak_leveling(grid_model, future_price, grid_peak_penalty, dt)
+    prob += cost + peak_leveling(grid_model, average_import_price, grid_peak_penalty, dt)
 
     prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit_s))
 

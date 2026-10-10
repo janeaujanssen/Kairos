@@ -290,7 +290,7 @@ As a simple approach to controlling the building thermal mass using a heat pump,
 # Default weather compensation temperature: 20°C
 # Current indoor temperature: 20.5°C
 # Max comfort temperature: 21°C
-# Heating rate: 0.6 °C/hour (heat pump set +dT w.r.t. default curve)
+# Heating rate: 0.1 °C/hour (heat pump set +dT w.r.t. default curve)
 # Cooldown rate: 0.1 °C/hour (heat pump set -dT w.r.t. default curve)
 # Heat pump COP for +dT mode: 2.5
 # Heat pump COP for default curve mode: 3
@@ -373,7 +373,7 @@ $$\text{Remaining Storage Value}_{T} = \text{Remaining Stored Energy}_{T} \times
 
 With
 
-- $\text{Future Import Price}$ being the expected electricity import price beyond the optimization horizon, calculated as the average price from the available price forecast.
+- $\text{Future Import Price}$ being a conservative estimate of the electricity import price beyond the optimization horizon, calculated as the average of the cheapest 25% of forecast intervals (rounding the interval count up, with at least one interval). The average forecast price remains the scale used by the grid-peak tie-breaker.
 - $\eta_{\mathrm{value}}$ being the amount of grid electricity [Wh] that one stored Wh is worth, which depends on the storage type:
 
 | Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
@@ -451,6 +451,7 @@ Examples include:
 - Energy capacity
 - Availability windows (charging and discharging are only allowed when the availability window is 1)
 - State-of-charge limits
+- Minimum active mode power, $P_{\min}^{\mathrm{mode}} = 100\,\mathrm{W}$, for every storage asset
 
 For storage assets, the state of charge must evolve according to the storage dynamics:
 
@@ -475,9 +476,13 @@ This ensures that energy stored in an asset remains physically consistent over t
 
 Storage assets cannot simultaneously charge and discharge, enforced via the binary variables $c_t, d_t \in \{0, 1\}$ (defined in [Storage Mode Switching Penalty](#storage-mode-switching-penalty)) for charging and discharging respectively, with $c_t + d_t \leq 1$. When both are 0 the storage is idle.
 
+For any modeled charge or discharge mode, the active power must meet the universal minimum, this helps mapping the binary variables correctly:
+
+$$P_{\mathrm{charge},t} \geq P_{\min}^{\mathrm{mode}} c_t, \quad P_{\mathrm{discharge},t} \geq P_{\min}^{\mathrm{mode}} d_t$$
+
 For a `Battery`, the power is continuous:
 
-$$P_{\text{charge},t} \leq P_{\text{charge}}^{\max} \cdot c_t, \quad P_{\text{discharge},t} \leq P_{\text{discharge}}^{\max} \cdot d_t, \quad c_t + d_t \leq 1$$
+$$P_{\min}^{\mathrm{mode}} c_t \leq P_{\text{charge},t} \leq P_{\text{charge}}^{\max} c_t, \quad P_{\min}^{\mathrm{mode}} d_t \leq P_{\text{discharge},t} \leq P_{\text{discharge}}^{\max} d_t, \quad c_t + d_t \leq 1$$
 
 where $P_{\text{charge}}^{\max}$ and $P_{\text{discharge}}^{\max}$ are `max_charge_power` and `max_discharge_power`. This reflects the physical constraint of single-direction power converters.
 
@@ -485,7 +490,7 @@ For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode
 
 $$P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
 
-where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` and `discharge_power`. When both binaries are 0 the heat pump runs in neutral mode (default curve).
+where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` and `discharge_power`; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
 **Exceptions**:
 - Energy demand forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 

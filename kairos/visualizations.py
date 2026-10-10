@@ -118,9 +118,9 @@ def power_flow_chart(
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
     # Supply side - Grid and PV (lines)
-    fig.add_scatter(x=timestamps, y=net_grid_w, name="Net Grid Power", line=dict(color=asset_color("grid")), line_shape="hvh",
+    fig.add_scatter(x=timestamps, y=pv_w, name="PV Production", line=dict(color=asset_color("pv"), dash="solid"), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
-    fig.add_scatter(x=timestamps, y=pv_w, name="PV Production", line=dict(color=asset_color("pv")), line_shape="hvh",
+    fig.add_scatter(x=timestamps, y=net_grid_w, name="Net Grid Power", line=dict(color=asset_color("grid")), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
 
@@ -129,10 +129,10 @@ def power_flow_chart(
     import_price_kwh = [p * 1000 for p in import_price]
     export_price_kwh = [p * 1000 for p in export_price]
     fig.add_scatter(x=timestamps, y=import_price_kwh, name="Import price", yaxis="y2", 
-                    line=dict(color=COST_COLORS["cost"], dash="solid"), line_shape="spline",
+                    line=dict(color=COST_COLORS["cost"], dash="dot", width=2), line_shape="hvh",
                     hovertemplate="%{y:.3f} price/kWh<extra></extra>")
     fig.add_scatter(x=timestamps, y=export_price_kwh, name="Export price", yaxis="y2", 
-                    line=dict(color=COST_COLORS["profit"], dash="solid"), line_shape="spline",
+                    line=dict(color=COST_COLORS["profit"], dash="dot", width=2), line_shape="hvh",
                     hovertemplate="%{y:.3f} price/kWh<extra></extra>")
     
     fig.update_layout(

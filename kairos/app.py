@@ -22,7 +22,7 @@ st.set_page_config(page_title="Kairos - Easy, optimized energy scheduling for Ho
 
 # ---------------------------------------------------------------------------
 # Asset definitions: (key, label, default, kind[, number format])
-# kinds: num (>= 0), frac (0-1), temp (any sign), time
+# kinds: num (>= 0, step 1), num_hundredth (>= 0, step 0.01), frac (0-1), temp (any sign), time
 # ---------------------------------------------------------------------------
 ASSET_TYPES = {
     "grid": {"icon": "⚡", "label": "Grid", "single": True},
@@ -56,9 +56,9 @@ PHYSICAL_FIELDS = {
     "controllable_load": [
         ("current_power", "Current power [W]", 0.0, "num"),
         ("average_power", "Average power [W]", 1500.0, "num"),
-        ("energy_demand", "Energy demand [Wh]", 1800.0, "num"),
-        ("earliest_start_h", "Earliest start [h from now]", 0.0, "num"),
-        ("latest_finish_h", "Latest finish [h from now]", 12.0, "num"),
+        ("runtime_h", "Runtime [h]", 1.2, "num", "%.2f"),
+        ("earliest_start_time", "Earliest start time", time(0, 0), "time"),
+        ("latest_finish_time", "Latest finish time", time(12, 0), "time"),
     ],
     "home_battery": [
         ("energy_capacity", "Energy capacity [Wh]", 10000.0, "num"),
@@ -88,8 +88,8 @@ PHYSICAL_FIELDS = {
         ("default_weather_compensation_temperature", "Default weather compensation temp [°C]", 20.0, "temp"),
         ("current_indoor_temperature", "Current indoor temperature [°C]", 20.5, "temp"),
         ("max_comfort_temperature", "Max comfort temperature [°C]", 21.0, "temp"),
-        ("heating_rate", "Heating rate (+dT) [°C/h]", 0.6, "num"),
-        ("cooldown_rate", "Cooldown rate (-dT) [°C/h]", 0.1, "num"),
+        ("heating_rate", "Heating rate (+dT) [°C/h]", 0.1, "num_hundredth"),
+        ("cooldown_rate", "Cooldown rate (-dT) [°C/h]", 0.1, "num_hundredth"),
         ("heat_pump_cop_charge", "Heat pump COP, +dT mode [-]", 2.5, "num"),
         ("heat_pump_cop_default", "Heat pump COP, default mode [-]", 3.0, "num"),
     ],
@@ -159,9 +159,9 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
         else:
             values[key] = st.number_input(
                 label,
-                min_value=0.0 if kind == "num" else None,
+                min_value=0.0 if kind in {"num", "num_hundredth"} else None,
                 value=float(default),
-                step=0.001 if fmt else 1.0,
+                step=0.001 if fmt else 0.01 if kind == "num_hundredth" else 1.0,
                 format=fmt[0] if fmt else None,
                 key=wkey,
             )
@@ -172,7 +172,8 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    run_clicked = st.button("▶ Run optimization", type="primary", width="stretch")
+    st.header("Simulation settings")
+    run_clicked = st.button("▶ Run simulation optimization", type="primary", width="stretch")
 
     with st.expander("Sign Convention Reference"):
         st.markdown(
@@ -187,7 +188,7 @@ with st.sidebar:
 
     st.subheader("Asset Enablement Toggles")
     if not st.session_state.assets:
-        st.caption("No assets yet. Add them in the Inputs tab.")
+        st.caption("No assets yet. Add them in the Simulation inputs tab.")
     for asset in st.session_state.assets:
         info = ASSET_TYPES[asset["type"]]
         asset["enabled"] = st.toggle(
@@ -202,15 +203,16 @@ with st.sidebar:
     switching_penalty = st.number_input(
         "Switching penalty [currency units / mode change]",
         min_value=0.0,
-        value=0.1,
-        step=1.0,
+        value=0.010,
+        step=0.001,
+        format="%.3f",
         help="Softly discourages storage mode changes between timesteps. Set to 0 to disable.",
     )
     grid_peak_penalty = st.number_input(
         "Grid peak penalty",
         min_value=0.0,
         value=0.1,
-        step=0.01,
+        step=0.1,
         format="%.2f",
         help=(
             "Dimensionless weight. At 0.40 currency/kWh with 15-minute steps, 0.1 means the "
@@ -253,8 +255,13 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
     elif t == "base_load":
         payload["power_forecast"] = fs.base_load_forecast(hours_of_day, **forecast)
     elif t == "controllable_load":
-        payload["earliest_start_time"] = (start + timedelta(hours=payload.pop("earliest_start_h"))).isoformat()
-        payload["latest_finish_time"] = (start + timedelta(hours=payload.pop("latest_finish_h"))).isoformat()
+        payload["energy_demand"] = physical["average_power"] * payload.pop("runtime_h")
+        for key in ("earliest_start_time", "latest_finish_time"):
+            scheduled_time = payload[key]
+            scheduled_datetime = datetime.combine(start.date(), scheduled_time, tzinfo=start.tzinfo)
+            if scheduled_datetime < start:
+                scheduled_datetime += timedelta(days=1)
+            payload[key] = scheduled_datetime.isoformat()
     elif t in STORAGE_TYPES:
         payload["storage_type"] = t
         for key, value in forecast.items():
@@ -452,7 +459,7 @@ def refresh_latest_result() -> None:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_inputs, tab_opt = st.tabs(["📥 Inputs", "📊 Optimization results"])
+tab_inputs, tab_opt = st.tabs(["📥 Simulation inputs", "📊 Optimization results"])
 
 entries: list[tuple[dict, dict, object]] = []
 with tab_inputs:
@@ -495,14 +502,14 @@ if run_clicked:
         run_optimization(entries)
 
 with tab_opt:
-    if st.button("Refresh latest result"):
+    if st.button("Refresh latest result", type="primary"):
         refresh_latest_result()
     elif st.session_state.result is None:
         refresh_latest_result()
 
     result = st.session_state.result
     if result is None:
-        st.info("No result yet. Click 'Run optimization' in the sidebar.")
+        st.info("No result yet. Click 'Run simulation optimization' in the sidebar or run an optimization via external API request.")
     elif "error" in result:
         st.error(result["error"])
     else:

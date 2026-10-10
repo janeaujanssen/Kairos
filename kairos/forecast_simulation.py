@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from datetime import datetime, time, timedelta
 
 
@@ -16,7 +17,7 @@ def grid_price_forecast(
     export_fraction: float = 0.4,
 ) -> tuple[list[float], list[float]]:
     """
-    Generate import and export price forecasts.
+    Generate import and export price forecasts with deterministic price variation.
     
     Args:
         hours: Hour of day for each timestep (0-24)
@@ -32,6 +33,7 @@ def grid_price_forecast(
     """
     morning_h = morning_peak_time.hour + morning_peak_time.minute / 60
     evening_h = evening_peak_time.hour + evening_peak_time.minute / 60
+    noise = random.Random(0)
     
     import_prices = []
     for h in hours:
@@ -41,6 +43,7 @@ def grid_price_forecast(
             price = baseline_price + (evening_peak_price - baseline_price) * math.exp(-((h - evening_h) ** 2) / 2)
         else:
             price = baseline_price
+        price *= noise.uniform(0.95, 1.05)
         import_prices.append(max(0, price))
     
     export_prices = [p * export_fraction for p in import_prices]
