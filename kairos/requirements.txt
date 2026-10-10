@@ -4,6 +4,7 @@ pulp<4
 pyyaml
 streamlit
 plotly
+numpy<2.3
 pandas
 requests
 supervisor
