@@ -228,7 +228,6 @@ components:
       required:
         - id
         - name
-        - current_power
         - power_forecast
       properties:
         id:
@@ -237,10 +236,6 @@ components:
         name:
           type: string
           example: "Household Base Load"
-        current_power:
-          type: number
-          description: Current consumption power in Watts (Always >= 0), measured as total house consumption minus all modelled devices.
-          example: 450.0
         power_forecast:
           type: array
           description: Uncontrollable power demand forecast [W] per time step. Array has one entry per time step; each entry represents the average power consumed during the period starting at that time step.
@@ -252,7 +247,6 @@ components:
       required:
         - id
         - name
-        - current_power
         - average_power
         - energy_demand
       properties:
@@ -262,10 +256,6 @@ components:
         name:
           type: string
           example: "Dishwasher"
-        current_power:
-          type: number
-          description: Current consumption power in Watts (Always >= 0).
-          example: 0.0
         average_power:
           type: number
           description: Average power [W].
@@ -274,6 +264,12 @@ components:
           type: number
           description: Total energy demand [Wh].
           example: 1800.0
+        run_started_at:
+          type: string
+          format: date-time
+          description: >-
+            Actual start timestamp for a run already in progress. The optimizer keeps the load
+            on at average_power until its fixed run duration elapses; omit when no run is active.
         earliest_start_time:
           type: string
           format: date-time

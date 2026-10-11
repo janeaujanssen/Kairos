@@ -38,7 +38,6 @@ class PV(Source):
 class Load:
     id: str
     name: str
-    current_power: float = 0.0  # W
     controllable: bool = False
 
 
@@ -55,6 +54,7 @@ class ControllableLoad(Load):
     earliest_start_time: datetime | None = None
     latest_finish_time: datetime | None = None
     controllable: bool = True
+    run_started_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

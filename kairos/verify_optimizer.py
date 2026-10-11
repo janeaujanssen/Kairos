@@ -1,9 +1,9 @@
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pulp
 import optimizer
-from classes import BTM, DHW, BaseLoad, Battery, Grid
+from classes import BTM, DHW, BaseLoad, Battery, ControllableLoad, Grid
 
 print(f"optimizer import: OK ({optimizer.__file__})")
 
@@ -12,6 +12,41 @@ assert optimizer._cbc_termination_reason("Stopped on nodes - objective value 0")
 assert optimizer._cbc_termination_reason("Optimal - objective value 0") == "Optimality proven"
 assert optimizer._cbc_termination_reason("Optimal (within gap tolerance) - objective value 0") == "Relative MIP gap target reached"
 print("CBC termination reasons are recognized: OK")
+
+run_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+started_load = ControllableLoad(
+    "started-load",
+    "Started load",
+    average_power=1000.0,
+    energy_demand=3000.0,
+    run_started_at=run_start - timedelta(hours=1),
+)
+continued_run = optimizer.add_controllable_load(
+    None,
+    started_load,
+    0,
+    run_start,
+    1.0,
+    4,
+)
+assert continued_run == [1000.0, 1000.0, 0.0, 0.0], "an in-progress load run was interrupted"
+completed_load = ControllableLoad(
+    "completed-load",
+    "Completed load",
+    average_power=1000.0,
+    energy_demand=3000.0,
+    run_started_at=run_start - timedelta(hours=4),
+)
+completed_run = optimizer.add_controllable_load(
+    None,
+    completed_load,
+    0,
+    run_start,
+    1.0,
+    4,
+)
+assert completed_run == [0.0, 0.0, 0.0, 0.0], "a completed run was scheduled again"
+print("Started controllable loads run to completion without restarting: OK")
 
 optimize = getattr(optimizer, "optimize", None)
 if optimize is None:

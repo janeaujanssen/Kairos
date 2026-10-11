@@ -100,7 +100,6 @@ def convert_base_load(data: dict[str, Any]) -> BaseLoad:
     return BaseLoad(
         id=data["id"],
         name=data["name"],
-        current_power=data["current_power"],
         power_forecast=data["power_forecast"],
     )
 
@@ -110,9 +109,9 @@ def convert_controllable_load(data: dict[str, Any]) -> ControllableLoad:
     return ControllableLoad(
         id=data["id"],
         name=data["name"],
-        current_power=data["current_power"],
         average_power=data["average_power"],
         energy_demand=data["energy_demand"],
+        run_started_at=_parse_optional_dt(data.get("run_started_at")),
         earliest_start_time=_parse_optional_dt(data.get("earliest_start_time")),
         latest_finish_time=_parse_optional_dt(data.get("latest_finish_time")),
     )

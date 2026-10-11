@@ -4,7 +4,6 @@
 > **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
-> - Controllable load run continuity: Ensure that once a controllable load starts operating, it continues until the end of its required run time.
 > - Not super happy with Building Thermal Mass implementation:
 >   - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
 # Contents
@@ -104,7 +103,7 @@ Every load shares a set of general attributes. Attributes that depend on the loa
 #### General attributes
 
 ##### State
-- Current Power [W]
+- None
 
 ##### Constraints
 - Controllable [-] *(yes/no, fixed per class: no for `BaseLoad`, yes for `ControllableLoad`)*
@@ -114,7 +113,7 @@ Every load shares a set of general attributes. Attributes that depend on the loa
 | Load class | Class specific attributes |
 |---|---|
 | `BaseLoad` (household demand) | Power Forecast [W per time step] |
-| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
+| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional while a run is active]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
 
 ## Storage
 
@@ -472,6 +471,12 @@ where:
 - $\Delta t$ represents the time step duration [h].
 
 This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
+
+### Controllable Load Run Continuity
+
+A controllable load without `run_started_at` is scheduled as one uninterrupted run within its operating window. When `run_started_at` is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again as the same run.
+
+`run_started_at` must be a timezone-aware timestamp no later than the optimization timestamp. The caller should omit it when there is no active run; completed jobs should no longer be submitted as pending controllable loads.
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
 

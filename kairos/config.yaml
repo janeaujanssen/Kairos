@@ -1,6 +1,6 @@
 name: Kairos
 slug: kairos
-version: "0.1.2"
+version: "0.1.3"
 description: Energy scheduling dashboard and optimization API
 startup: application
 boot: auto

@@ -213,7 +213,6 @@ The integration builds one `POST /optimize` request from the snapshot. Shown bel
     {
       "id": "base_load_household",
       "name": "Household Base Load",
-      "current_power": 450,
       "controllable": false,
       "average_power": 0,
       "energy_demand": 0,

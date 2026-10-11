@@ -52,13 +52,13 @@ PHYSICAL_FIELDS = {
         ("max_export_power", "Max export power [W]", 11000.0, "num"),
     ],
     "pv": [("current_power", "Current power [W]", 0.0, "num")],
-    "base_load": [("current_power", "Current power [W]", 450.0, "num")],
+    "base_load": [],
     "controllable_load": [
-        ("current_power", "Current power [W]", 0.0, "num"),
         ("average_power", "Average power [W]", 1500.0, "num"),
         ("runtime_h", "Runtime [h]", 1.2, "num", "%.2f"),
         ("earliest_start_time", "Earliest start time", time(0, 0), "time"),
         ("latest_finish_time", "Latest finish time", time(12, 0), "time"),
+        ("run_started_at", "Run already started", None, "optional_datetime"),
     ],
     "home_battery": [
         ("energy_capacity", "Energy capacity [Wh]", 10000.0, "num"),
@@ -154,6 +154,14 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
         wkey = f"{asset_id}_{key}"
         if kind == "time":
             values[key] = st.time_input(label, value=default, key=wkey)
+        elif kind == "optional_datetime":
+            if st.checkbox(label, key=f"{wkey}_enabled"):
+                default_start = start - timedelta(minutes=30)
+                run_date = st.date_input("Run started date", value=default_start.date(), key=f"{wkey}_date")
+                run_time = st.time_input("Run started time", value=default_start.time(), key=f"{wkey}_time")
+                values[key] = datetime.combine(run_date, run_time, tzinfo=start.tzinfo)
+            else:
+                values[key] = None
         elif kind == "frac":
             values[key] = st.number_input(label, 0.0, 1.0, float(default), step=0.05, key=wkey)
         else:
@@ -244,6 +252,18 @@ hours_of_day = [(start.hour + start.minute / 60 + i * step_h) % 24 for i in rang
 # ---------------------------------------------------------------------------
 # Payload building
 # ---------------------------------------------------------------------------
+def _operating_window_timestamps(
+    optimization_start: datetime, earliest: time, latest: time
+) -> tuple[datetime, datetime]:
+    """Map daily time-of-day bounds to the next operating window."""
+    finish = datetime.combine(optimization_start.date(), latest, tzinfo=optimization_start.tzinfo)
+    if finish <= optimization_start:
+        finish += timedelta(days=1)
+    start_date = finish.date() - timedelta(days=1) if earliest > latest else finish.date()
+    earliest_start = datetime.combine(start_date, earliest, tzinfo=optimization_start.tzinfo)
+    return earliest_start, finish
+
+
 def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
     """Assemble the API payload for one asset from its physical and forecast inputs."""
     payload = {"id": asset["id"], "name": asset["name"], **physical}
@@ -265,12 +285,13 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
         payload["power_forecast"] = fs.base_load_forecast(hours_of_day, **forecast)
     elif t == "controllable_load":
         payload["energy_demand"] = physical["average_power"] * payload.pop("runtime_h")
-        for key in ("earliest_start_time", "latest_finish_time"):
-            scheduled_time = payload[key]
-            scheduled_datetime = datetime.combine(start.date(), scheduled_time, tzinfo=start.tzinfo)
-            if scheduled_datetime < start:
-                scheduled_datetime += timedelta(days=1)
-            payload[key] = scheduled_datetime.isoformat()
+        earliest_start, latest_finish = _operating_window_timestamps(
+            start, payload["earliest_start_time"], payload["latest_finish_time"]
+        )
+        payload["earliest_start_time"] = earliest_start.isoformat()
+        payload["latest_finish_time"] = latest_finish.isoformat()
+        if payload["run_started_at"] is not None:
+            payload["run_started_at"] = payload["run_started_at"].isoformat()
     elif t in STORAGE_TYPES:
         payload["storage_type"] = t
         for key, value in forecast.items():

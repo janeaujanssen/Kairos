@@ -147,6 +147,15 @@ def add_controllable_load(
 ) -> list[Expr]:
     """Run once, uninterrupted, at average power, inside the allowed window."""
     run_steps = math.ceil(load.energy_demand / (load.average_power * dt) - 1e-9)
+    if load.run_started_at is not None:
+        if load.run_started_at.tzinfo is None or load.run_started_at.utcoffset() is None:
+            raise ValueError(f"Load {load.id!r} run_started_at must include a timezone offset")
+        if load.run_started_at > start:
+            raise ValueError(f"Load {load.id!r} run_started_at cannot be after the optimization timestamp")
+        run_end = load.run_started_at + timedelta(hours=run_steps * dt)
+        remaining_steps = max(0, math.ceil(_steps_since(start, run_end, dt) - 1e-9))
+        return [load.average_power if t < remaining_steps else 0.0 for t in range(n_steps)]
+
     first = 0
     if load.earliest_start_time is not None:
         first = max(0, math.ceil(_steps_since(start, load.earliest_start_time, dt) - 1e-9))
