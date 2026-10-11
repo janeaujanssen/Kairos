@@ -1,9 +1,17 @@
 import inspect
+from datetime import datetime, timezone
+
 import pulp
 import optimizer
-from classes import BTM, DHW, Battery
+from classes import BTM, DHW, BaseLoad, Battery, Grid
 
 print(f"optimizer import: OK ({optimizer.__file__})")
+
+assert optimizer._cbc_termination_reason("Stopped on time - objective value 0") == "Time limit reached"
+assert optimizer._cbc_termination_reason("Stopped on nodes - objective value 0") == "Node limit reached"
+assert optimizer._cbc_termination_reason("Optimal - objective value 0") == "Optimality proven"
+assert optimizer._cbc_termination_reason("Optimal (within gap tolerance) - objective value 0") == "Relative MIP gap target reached"
+print("CBC termination reasons are recognized: OK")
 
 optimize = getattr(optimizer, "optimize", None)
 if optimize is None:
@@ -11,6 +19,7 @@ if optimize is None:
 params = inspect.signature(optimize).parameters
 print("optimize parameters:", ", ".join(params))
 assert "switching_penalty" in params, "switching_penalty parameter is missing from optimize()"
+assert params["relative_mip_gap"].default == 0.0, "relative_mip_gap must default to zero"
 print("1. switching_penalty: OK")
 
 for name in ("add_battery", "add_dhw", "add_btm"):
@@ -67,5 +76,135 @@ for name, add_flows, storage, mode_name in discrete_modes:
     prob.solve(pulp.PULP_CBC_CMD(msg=False))
     assert pulp.LpStatus[prob.status] == "Infeasible", f"{name} below 100 W was allowed"
     print(f"{name} below 100 W is rejected: OK")
+
+grid = Grid(
+    "grid",
+    "Grid",
+    max_import_power=10000.0,
+    max_export_power=10000.0,
+    import_price_forecast=[0.2],
+    export_price_forecast=[0.05],
+)
+base_load = BaseLoad("base", "Base", power_forecast=[0.0])
+peak_result = optimizer.optimize(
+    [grid],
+    [BaseLoad("peak-base", "Peak base", power_forecast=[100.0])],
+    [],
+    datetime(2026, 1, 1, tzinfo=timezone.utc),
+    1.0,
+    1,
+    relative_mip_gap=0.0,
+    switching_penalty=0.0,
+    grid_peak_penalty=0.1,
+)
+assert abs(peak_result.objective_cost - 22.0) < 1e-8, (
+    "objective_cost does not include the grid peak tie-breaker"
+)
+print("objective_cost includes the full optimized objective: OK")
+
+for name, current_soc, minimum, maximum, demand, expected_soc, min_cost in (
+    ("below minimum", 0.5, 0.2, 0.9, 400.0, 0.1, 10000.0),
+    ("above maximum", 0.8, 0.1, 0.5, 0.0, 0.8, 50000.0),
+):
+    battery = Battery(
+        "soc-test-battery",
+        "SoC test battery",
+        current_soc=current_soc,
+        energy_capacity=1000.0,
+        min_soc=minimum,
+        max_soc=maximum,
+        charge_efficiency=1.0,
+        discharge_efficiency=1.0,
+        energy_demand_forecast=[demand],
+        availability_window=[0],
+        max_charge_power=1000.0,
+        max_discharge_power=1000.0,
+    )
+    result = optimizer.optimize(
+        [grid],
+        [base_load],
+        [battery],
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        1.0,
+        1,
+        relative_mip_gap=0.0,
+        switching_penalty=0.0,
+        grid_peak_penalty=0.0,
+    )
+    assert result.status == "Optimal", f"{name} made the problem infeasible"
+    assert result.relative_mip_gap == 0.0
+    assert result.termination_reason == "Optimality proven"
+    assert abs(result.assets[battery.id]["soc_schedule"][0]["value"] - expected_soc) < 1e-8
+    assert result.objective_cost > min_cost, f"{name} was not strongly penalized"
+    print(f"SoC {name} is allowed with a strong penalty: OK")
+
+impossible_battery = Battery(
+    "impossible-battery",
+    "Impossible battery",
+    current_soc=0.5,
+    energy_capacity=1000.0,
+    min_soc=0.2,
+    max_soc=0.9,
+    energy_demand_forecast=[2000.0],
+    availability_window=[0],
+    max_charge_power=1000.0,
+    max_discharge_power=1000.0,
+)
+impossible = optimizer.optimize(
+    [grid],
+    [base_load],
+    [impossible_battery],
+    datetime(2026, 1, 1, tzinfo=timezone.utc),
+    1.0,
+    1,
+    switching_penalty=0.0,
+    grid_peak_penalty=0.0,
+)
+assert impossible.status == "Infeasible", "physical energy bounds were softened"
+print("Physical storage capacity remains a hard bound: OK")
+
+priority_grid = Grid(
+    "priority-grid",
+    "Priority grid",
+    max_import_power=10000.0,
+    max_export_power=10000.0,
+    import_price_forecast=[0.2],
+    export_price_forecast=[0.05],
+)
+dhw = DHW(
+    "priority-dhw",
+    "Priority DHW",
+    current_soc=0.0,
+    energy_capacity=1000.0,
+    min_soc=0.5,
+    charge_efficiency=1.0,
+    discharge_efficiency=1.0,
+    charge_power=300.0,
+)
+btm = BTM(
+    "priority-btm",
+    "Priority BTM",
+    current_soc=0.0,
+    energy_capacity=1000.0,
+    min_soc=0.5,
+    charge_efficiency=1.0,
+    discharge_efficiency=1.0,
+    charge_power=300.0,
+    discharge_power=300.0,
+    default_efficiency=1.0,
+)
+priority = optimizer.optimize(
+    [priority_grid],
+    [base_load],
+    [dhw, btm],
+    datetime(2026, 1, 1, tzinfo=timezone.utc),
+    1.0,
+    1,
+    switching_penalty=0.0,
+    grid_peak_penalty=0.0,
+)
+assert priority.assets[dhw.id]["setpoint"] == 300.0
+assert priority.assets[btm.id]["setpoint"] == 0.0
+print("DHW and BTM charging is mutually exclusive, with DHW priority: OK")
 
 print("All requested checks passed.")

@@ -4,6 +4,7 @@
 > **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
+> - Controllable load run continuity: Ensure that once a controllable load starts operating, it continues until the end of its required run time.
 > - Not super happy with Building Thermal Mass implementation:
 >   - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
 # Contents
@@ -451,7 +452,7 @@ Examples include:
 - Energy capacity
 - Availability windows (charging and discharging are only allowed when the availability window is 1)
 - State-of-charge limits
-- Minimum active mode power, $P_{\min}^{\mathrm{mode}} = 100\,\mathrm{W}$, for every storage asset
+- Minimum active mode power, $P_{\min}^{\mathrm{mode}}$, for every storage asset
 
 For storage assets, the state of charge must evolve according to the storage dynamics:
 
@@ -524,15 +525,17 @@ This ensures the optimizer always returns the best achievable solution while str
 The optimizer returns the optimization result containing the following information:
 
 ### Status
-The solver status indicating whether an optimal solution was found:
-- **Optimal**: A globally optimal solution was found.
-- **Feasible**: A feasible solution was found, but optimality was not proven (e.g., time limit reached).
+The solver status indicating whether CBC met its configured stopping criteria:
+- **Optimal**: CBC proved optimality or met the configured relative MIP gap.
+- **Feasible**: A feasible solution was found, but CBC stopped before meeting the optimality criteria (e.g., time limit reached).
 - **Infeasible**: No feasible solution exists for the given constraints.
 
-### Objective Cost
-The total cost of the optimal or best-found schedule [price units], representing:
+`relative_mip_gap` is a fraction (default `0`). A value of `0` requires CBC's optimality proof. The response also includes the configured gap and may include `termination_reason`, a recognized CBC explanation such as `Time limit reached`, `Relative MIP gap target reached`, or `Optimality proven`.
 
-$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t}) - \text{Remaining Storage Value}_{T}$$
+### Objective Cost
+The value of the full objective optimized by CBC [price units]. It includes the grid energy cost, less the BTM discharge benefit and remaining storage value, plus SoC violation penalties, storage-mode switching penalties, and the grid peak tie-breaker. This value can differ from the grid energy cost shown separately in the UI:
+
+$$\text{Objective Cost} = \text{Grid Energy Cost} - \text{BTM Discharge Benefit} - \text{Remaining Storage Value} + \text{SoC Violation Penalties} + \text{Switching Penalties} + \text{Grid Peak Tie-Breaker}$$
 
 ### Asset Schedules
 

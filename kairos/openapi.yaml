@@ -108,6 +108,13 @@ components:
           minimum: 1
           maximum: 3600
           description: Maximum solver runtime in seconds.
+        relative_mip_gap:
+          type: number
+          format: float
+          default: 0.0
+          minimum: 0.0
+          maximum: 1.0
+          description: Relative MIP gap fraction. Set to 0 to require CBC's optimality proof.
         switching_penalty:
           type: number
           format: float
@@ -604,9 +611,18 @@ components:
           type: string
           enum: [Optimal, Feasible, Infeasible]
           example: "Optimal"
+        termination_reason:
+          type: string
+          description: CBC-reported reason the solve ended, when recognized.
+          example: "Time limit reached"
+        relative_mip_gap:
+          type: number
+          format: float
+          description: Relative MIP gap fraction used by CBC.
+          example: 0.0
         objective_cost:
           type: number
-          description: Evaluated total objective cost over the planning horizon.
+          description: Evaluated full objective optimized by CBC, including penalties and tie-breaker terms.
           example: 1.24
         time_step_minutes:
           type: number
@@ -734,6 +750,13 @@ components:
           minimum: 1
           maximum: 3600
           description: Maximum solver runtime in seconds.
+        relative_mip_gap:
+          type: number
+          format: float
+          default: 0.0
+          minimum: 0.0
+          maximum: 1.0
+          description: Relative MIP gap fraction. Set to 0 to require CBC's optimality proof.
         switching_penalty:
           type: number
           format: float

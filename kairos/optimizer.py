@@ -35,6 +35,8 @@ from classes import (
 
 Expr = pulp.LpAffineExpression | float
 MIN_STORAGE_MODE_POWER = 300
+SOC_VIOLATION_PENALTY_MULTIPLIER = 1000.0
+DHW_SOC_VIOLATION_PENALTY_MULTIPLIER = 2.0
 
 
 @dataclass
@@ -45,6 +47,44 @@ class OptimizationResult:
     objective_cost: float
     time_step_minutes: float
     assets: dict[str, dict]
+    termination_reason: str | None = None
+    relative_mip_gap: float = 0.0
+
+
+def _cbc_termination_reason(solution_header: str) -> str | None:
+    header = solution_header.casefold()
+    if header.startswith("optimal"):
+        if "gap" in header or "within" in header:
+            return "Relative MIP gap target reached"
+        return "Optimality proven"
+    if header.startswith("infeasible"):
+        return "Problem proven infeasible"
+    if header.startswith("integer infeasible"):
+        return "No integer-feasible solution found"
+    if header.startswith("unbounded"):
+        return "Objective is unbounded"
+    if header.startswith("stopped on time"):
+        return "Time limit reached"
+    if header.startswith("stopped on nodes"):
+        return "Node limit reached"
+    if header.startswith("stopped on iterations"):
+        return "Iteration limit reached"
+    if header.startswith("stopped on gap"):
+        return "Optimality gap target reached"
+    if header.startswith("stopped"):
+        return "Solver stopped before proving optimality"
+    return None
+
+
+class _CbcSolverWithTerminationReason(pulp.PULP_CBC_CMD):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.termination_reason: str | None = None
+
+    def get_status(self, filename):
+        with open(filename, encoding="utf-8") as solution_file:
+            self.termination_reason = _cbc_termination_reason(solution_file.readline())
+        return super().get_status(filename)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +123,7 @@ class StorageModel:
     eta_value: float  # grid Wh that one stored Wh is worth at the end of the horizon
     discharge_benefit: Expr = 0.0  # BTM only: avoided cost of discharging
     stored_energy_per_step: list[pulp.LpVariable] = None  # stored energy [Wh] at end of each step
+    soc_violation_cost: Expr = 0.0
 
 
 def add_grid(prob: pulp.LpProblem, grid: Grid, n_steps: int) -> GridModel:
@@ -194,7 +235,13 @@ def add_btm(
 
 
 def add_storage(
-    prob: pulp.LpProblem, s: Storage, idx: int, dt: float, n_steps: int, import_price: list[float]
+    prob: pulp.LpProblem,
+    s: Storage,
+    idx: int,
+    dt: float,
+    n_steps: int,
+    import_price: list[float],
+    soc_violation_penalty_per_wh: float,
 ) -> StorageModel:
     """Class-specific flows from the add_* functions, shared state-of-charge dynamics here."""
     steps = range(n_steps)
@@ -221,16 +268,29 @@ def add_storage(
 
     # energy[t+1] = energy[t] + charged - discharged - demand - passive loss
     energy = pulp.LpVariable.dicts(f"s{idx}_energy", range(n_steps + 1), 0, s.energy_capacity)
+    below_min = pulp.LpVariable.dicts(f"s{idx}_soc_below_min", steps, 0)
+    above_max = pulp.LpVariable.dicts(f"s{idx}_soc_above_max", steps, 0)
     prob += energy[0] == s.current_soc * s.energy_capacity
     for t in steps:
         prob += energy[t + 1] == (
             energy[t] + flows.gain[t] - flows.loss[t] - demand[t] - s.passive_discharge_power * dt
         )
-        prob += energy[t + 1] >= s.min_soc * s.energy_capacity
-        prob += energy[t + 1] <= s.max_soc * s.energy_capacity
+        prob += energy[t + 1] + below_min[t] >= s.min_soc * s.energy_capacity
+        prob += energy[t + 1] - above_max[t] <= s.max_soc * s.energy_capacity
 
     stored_energy_per_step = [energy[t] for t in range(n_steps + 1)]
-    return StorageModel(s, flows, energy[n_steps], eta_value, discharge_benefit, stored_energy_per_step)
+    soc_violation_cost = soc_violation_penalty_per_wh * pulp.lpSum(
+        below_min[t] + above_max[t] for t in steps
+    )
+    return StorageModel(
+        s,
+        flows,
+        energy[n_steps],
+        eta_value,
+        discharge_benefit,
+        stored_energy_per_step,
+        soc_violation_cost,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +390,7 @@ def optimize(
     step_hours: float,
     n_steps: int,
     time_limit_s: int = 10,
+    relative_mip_gap: float = 0.0,
     switching_penalty: float = 0.1,
     grid_peak_penalty: float = 0.1,
 ) -> OptimizationResult:
@@ -360,10 +421,31 @@ def optimize(
         schedule[load.id] = power
         controllable_power = [a + b for a, b in zip(controllable_power, power)]
 
+    soc_violation_penalty_per_wh = SOC_VIOLATION_PENALTY_MULTIPLIER * max(
+        1e-9,
+        *(abs(price) for price in grid.import_price_forecast),
+        *(abs(price) for price in grid.export_price_forecast),
+    )
     storage_models = [
-        add_storage(prob, s, i, dt, n_steps, grid.import_price_forecast)
+        add_storage(
+            prob,
+            s,
+            i,
+            dt,
+            n_steps,
+            grid.import_price_forecast,
+            soc_violation_penalty_per_wh
+            * (DHW_SOC_VIOLATION_PENALTY_MULTIPLIER if isinstance(s, DHW) else 1.0),
+        )
         for i, s in enumerate(storage)
     ]
+    dhw_models = [m for m in storage_models if isinstance(m.storage, DHW)]
+    btm_models = [m for m in storage_models if isinstance(m.storage, BTM)]
+    for dhw_model in dhw_models:
+        for btm_model in btm_models:
+            for t in range(n_steps):
+                prob += dhw_model.flows.c_t[t] + btm_model.flows.c_t[t] <= 1
+
     storage_power: list[Expr] = [0.0] * n_steps
     for m in storage_models:
         schedule[m.storage.id] = m.flows.setpoint
@@ -381,16 +463,33 @@ def optimize(
         energy_cost(grid_model, dt)
         - pulp.lpSum(m.discharge_benefit for m in storage_models)
         - remaining_storage_value(storage_models, terminal_storage_price)
+        + pulp.lpSum(m.soc_violation_cost for m in storage_models)
         + storage_mode_switching_penalty(prob, storage_models, n_steps, switching_penalty)
     )
-    prob += cost + peak_leveling(grid_model, average_import_price, grid_peak_penalty, dt)
+    objective = cost + peak_leveling(grid_model, average_import_price, grid_peak_penalty, dt)
+    prob += objective
 
-    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit_s))
+    solver = _CbcSolverWithTerminationReason(
+        msg=False,
+        timeLimit=time_limit_s,
+        gapRel=relative_mip_gap,
+    )
+    prob.solve(solver)
 
     status = pulp.LpStatus[prob.status]
     if status == "Infeasible":
-        return OptimizationResult("Infeasible", 0.0, step_hours * 60, {})
-    if status != "Optimal" and prob.sol_status != pulp.LpSolutionIntegerFeasible:
+        return OptimizationResult(
+            "Infeasible",
+            0.0,
+            step_hours * 60,
+            {},
+            solver.termination_reason,
+            relative_mip_gap,
+        )
+    if prob.sol_status not in (
+        pulp.LpSolutionOptimal,
+        pulp.LpSolutionIntegerFeasible,
+    ):
         raise RuntimeError(f"Solver ended with status {status!r}")
 
     assets = {}
@@ -418,10 +517,12 @@ def optimize(
         ]
 
     return OptimizationResult(
-        status="Optimal" if status == "Optimal" else "Feasible",
-        objective_cost=float(pulp.value(cost)),
+        status="Optimal" if prob.sol_status == pulp.LpSolutionOptimal else "Feasible",
+        objective_cost=float(pulp.value(objective)),
         time_step_minutes=step_hours * 60,
         assets=assets,
+        termination_reason=solver.termination_reason,
+        relative_mip_gap=relative_mip_gap,
     )
 
 

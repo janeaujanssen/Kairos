@@ -200,6 +200,15 @@ with st.sidebar:
     interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
     start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
     time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
+    relative_mip_gap_percent = st.number_input(
+        "Relative MIP gap [%]",
+        min_value=0.0,
+        max_value=100.0,
+        value=0.0,
+        step=0.1,
+        format="%.3f",
+        help="Stop once the best schedule is within this relative gap of the best bound. Set to 0 to require CBC's optimality proof.",
+    )
     switching_penalty = st.number_input(
         "Switching penalty [currency units / mode change]",
         min_value=0.0,
@@ -362,6 +371,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "time_step_duration_hours": step_h,
         "horizon_hours": horizon_h,
         "time_limit_s": time_limit_s,
+        "relative_mip_gap": relative_mip_gap_percent / 100,
         "switching_penalty": switching_penalty,
         "grid_peak_penalty": grid_peak_penalty,
         "grid": grid[0][1],
@@ -519,10 +529,25 @@ with tab_opt:
         c1.metric("Status", data["status"])
         c2.metric("Solve time", f"{result['solve_time']:.2f} s")
         c3.metric("Objective cost", f"{data['objective_cost']:.2f}")
+        st.caption(f"Relative MIP gap target: {data.get('relative_mip_gap', 0.0) * 100:.3g}%")
+        if data.get("termination_reason"):
+            st.caption(f"Termination reason: {data['termination_reason']}")
 
         if data["status"] == "Infeasible":
             st.warning("No feasible schedule exists for the given constraints.")
         else:
+            if data["status"] == "Feasible":
+                st.info(
+                    "A valid schedule was found, but optimality was not proven. "
+                    "Its objective cost may be improved."
+                )
+            elif data["status"] == "Optimal":
+                st.success(
+                    "CBC met the configured relative MIP gap target; the result may not be the exact optimum."
+                    if data.get("relative_mip_gap", 0.0) > 0
+                    else "CBC proved optimality."
+                )
+
             assets = data["assets"]
             schedule = {
                 asset_id: [point["value"] for point in asset["schedule"]]

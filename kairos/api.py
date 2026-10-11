@@ -37,6 +37,7 @@ class OptimizationRequest(BaseModel):
     time_step_duration_hours: float
     horizon_hours: float
     time_limit_s: int = Field(default=10, ge=1, le=3600)
+    relative_mip_gap: float = Field(default=0.0, ge=0.0, le=1.0)
     switching_penalty: float = Field(default=0.1, ge=0.0)
     grid_peak_penalty: float = Field(
         default=0.1,
@@ -72,6 +73,8 @@ class AssetSchedule(BaseModel):
 
 class OptimizationResponse(BaseModel):
     status: str
+    termination_reason: str | None = None
+    relative_mip_gap: float = 0.0
     objective_cost: float
     time_step_minutes: float
     assets: dict[str, AssetSchedule]
@@ -112,6 +115,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
             step_hours=request.time_step_duration_hours,
             n_steps=n_steps,
             time_limit_s=request.time_limit_s,
+            relative_mip_gap=request.relative_mip_gap,
             switching_penalty=request.switching_penalty,
             grid_peak_penalty=request.grid_peak_penalty,
         )
@@ -122,6 +126,8 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
 
     response = OptimizationResponse(
         status=result.status,
+        termination_reason=result.termination_reason,
+        relative_mip_gap=result.relative_mip_gap,
         objective_cost=result.objective_cost,
         time_step_minutes=result.time_step_minutes,
         assets=result.assets,
