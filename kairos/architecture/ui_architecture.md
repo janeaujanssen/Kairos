@@ -14,24 +14,25 @@ The interface consists of two parts: an inputs interface where a user can genera
 
 **Sign Convention Reference** (expandable):
 - **Grid Power**: +import, −export
-- **PV Power**: +production
-- **Battery Power**: +charge, −discharge
-- **DHW Battery Power**: +charge, −discharge
-- **Building Battery Power**: +charge, −discharge
-- **Load Power**: +consumption
-- Energy balance: Grid + PV = Load + Storage at every timestep
+- **Solar Power**: +production
+- **Home Battery and EV Battery Power**: +charge, −discharge
+- **DHW Tank Power**: +charge, −discharge
+- **Building Thermal Mass Power**: +charge, −discharge
+- **Base Load and Controllable Load Power**: +consumption
+- Energy balance: Grid + Solar = Base Load + Controllable Load + Storage at every timestep
 
 **Asset Enablement Toggles**:
 If assets are added, they will appear in the sidebar list with their respective enablement toggles and icons.
 When disabled, the asset will not be considered in the optimization and will also be hidden from the inputs interface.
 - ⚡ Grid
-- 🔆 PV
+- 🔆 Solar
 - 🏠 Base Load
 - 🔌 Controllable Load
-- 🔋 Battery 
+- 🔋 Home Battery 
+- 🚗 EV Battery 
 - 💧 DHW Tank
 - 🏢 Building Thermal Mass 
-- 🚗 EV Battery 
+
 
 **Configuration Variables**:
 - **Planning Horizon** (hours): 6–48, default 24
@@ -41,7 +42,7 @@ When disabled, the asset will not be considered in the optimization and will als
 
 ## Inputs Tab (📥)
 
-**Add new assets**: Dedicated + buttons per asset type in row at top to add new assets, for grid and base load only 1 instance is allowed and the button will be disabled once an instance is added.
+**Add new assets**: Dedicated + buttons per asset type in row at top to add new assets, for Grid and Base Load only 1 instance is allowed and the button will be disabled once an instance is added.
 No assets added by default.
 
 ### Asset Structure (Each Expandable, by default collapsed)
@@ -65,35 +66,35 @@ Below the three columns: Forecast visualization (time-series charts) spanning th
     - Morning peak price
     - Evening peak price
     - Export price as fraction of import price
-- **PV**:
+- **Solar**:
   - `power_forecast` not shown under physical inputs, but is shown in the converted generic inputs section
-  - **PV power forecast** chart visualized based on:
+  - **Solar power forecast** chart visualized based on:
     - Peak power, resulting in bell curve that peaks at solar noon (midday) and is zero at night
-- **Base load**:
+- **Base Load**:
   - `power_forecast` not shown under physical inputs, but is shown in the converted generic inputs section
-  - **Base load power forecast** chart visualized based on:
+  - **Base Load power forecast** chart visualized based on:
     - Baseline consumption
     - Morning peak time
     - Evening peak time
     - Morning peak power
     - Evening peak power
-- **Controllable load**: no forecast
-- **Home battery**: no forecast
-- **EV battery**:
+- **Controllable Load**: no forecast
+- **Home Battery**: no forecast
+- **EV Battery**:
   - `vehicle_efficiency`, `round_trip_distance`, `expected_departure_time`, `expected_arrival_time` not shown under physical inputs, but are shown in the converted generic inputs section
-  - **EV energy demandforecast** chart visualized based on:
+  - **EV Battery energy demand forecast** chart visualized based on:
     - Vehicle efficiency
     - Round trip distance
     - Expected departure time
     - Expected arrival time
-- **DHW tank**:
+- **DHW Tank**:
   - `morning_peak_energy_demand`, `evening_peak_energy_demand`, `morning_peak_time`, `evening_peak_time` not shown under physical inputs, but are shown in the converted generic inputs section
-  - **DHW energy demand forecast** chart visualized based on:
+  - **DHW Tank energy demand forecast** chart visualized based on:
     - Morning peak energy demand
     - Evening peak energy demand
     - Morning peak time
     - Evening peak time
-- **Building thermal mass**: no forecast
+- **Building Thermal Mass**: no forecast
 
 ## Optimization Results Tab (📊)
 
@@ -109,9 +110,9 @@ Shows "Optimizing..." banner while the optimization is in progress.
 **Power Flow** — Hybrid chart showing power balance:
 - Supply side (steplines middle aligned `line_shape="hvh"`): 
   - Net Grid Power
-  - PV Production
+  - Solar Production
 - Demand side (stacked bars, barmode="relative"):
-  - Home Load
+  - Base Load
   - Controllable Load
   - Storage Power per asset
 - Secondary y-axis: Import/Export prices [price/kWh] (lines solid `line_shape="spline"`)
@@ -136,7 +137,7 @@ https://huetone.ardov.me/?palette=N4IgdghgtgpiBcICiYYCcDmBPABAEwgGcALAIwHsI08QAa
   - #000000
   - #000000
   - #000000
-- 🔆 PV (orange tints, 300 / 300 / 300):
+- 🔆 Solar (orange tints, 300 / 300 / 300):
   - #ff8f0e
   - #ff8f0e
   - #ff8f0e
@@ -148,7 +149,7 @@ https://huetone.ardov.me/?palette=N4IgdghgtgpiBcICiYYCcDmBPABAEwgGcALAIwHsI08QAa
   - #844cef
   - #b39cfd
   - #dcd4fe
-- 🔋 Battery (green tints, 500 / 300 / 150):
+- 🔋 Home Battery (green tints, 500 / 300 / 150):
   - #008434
   - #00c652
   - #89f09b
@@ -177,7 +178,7 @@ For costs:
 
 **Forecast charts** (Inputs):
 - Import/export price forecast: steplines middle aligned `line_shape="hvh"`
-- PV power forecast: filled area
-- Base load power forecast: filled area
-- EV energy demand forecast: bars (energy per timestep)
-- DHW energy demand forecast: bars (energy per timestep)
+- Solar power forecast: filled area
+- Base Load power forecast: filled area
+- EV Battery energy demand forecast: bars (energy per timestep)
+- DHW Tank energy demand forecast: bars (energy per timestep)

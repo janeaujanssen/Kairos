@@ -96,11 +96,11 @@ def power_flow_chart(
     # Zero line reference
     fig.add_hline(y=0, line_dash="dash", line_color=GRAY, layer="below")
 
-    # Home Load (Base Load) - supply side demand
-    fig.add_bar(x=timestamps, y=load_w, name="Home Load", marker_color=asset_color("base_load"),
+    # Base Load - demand side
+    fig.add_bar(x=timestamps, y=load_w, name="Base Load", marker_color=asset_color("base_load"),
                 hovertemplate="%{y:.1f} W<extra></extra>")
 
-    # Controllable loads - one bar per asset so each instance can use its palette color
+    # Controllable Loads - one bar per asset so each instance can use its palette color
     for color_index, controllable_id in enumerate(controllable_ids):
         if controllable_id not in storage_schedule_w:
             continue
@@ -117,8 +117,8 @@ def power_flow_chart(
         fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=storage_id, marker_color=color,
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
-    # Supply side - Grid and PV (lines)
-    fig.add_scatter(x=timestamps, y=pv_w, name="PV Production", line=dict(color=asset_color("pv"), dash="solid"), line_shape="hvh",
+    # Supply side - Grid and Solar (lines)
+    fig.add_scatter(x=timestamps, y=pv_w, name="Solar Production", line=dict(color=asset_color("pv"), dash="solid"), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
     fig.add_scatter(x=timestamps, y=net_grid_w, name="Net Grid Power", line=dict(color=asset_color("grid")), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
@@ -228,11 +228,11 @@ def forecast_chart(
                         hovertemplate="%{y:.3f} price/kWh<extra></extra>")
         return style(fig, "price/kWh")
     if asset_type == "pv":
-        return area_chart(timestamps, payload["power_forecast"], "PV power forecast", asset_color(asset_type, color_index), unit="W")
+        return area_chart(timestamps, payload["power_forecast"], "Solar power forecast", asset_color(asset_type, color_index), unit="W")
     if asset_type == "base_load":
-        return area_chart(timestamps, payload["power_forecast"], "Base load power forecast", asset_color(asset_type, color_index), unit="W")
+        return area_chart(timestamps, payload["power_forecast"], "Base Load power forecast", asset_color(asset_type, color_index), unit="W")
     if asset_type == "ev_battery" and generic is not None:
-        return bar_chart(timestamps, generic.energy_demand_forecast, "EV energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
+        return bar_chart(timestamps, generic.energy_demand_forecast, "EV Battery energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
     if asset_type == "dhw_tank" and generic is not None:
-        return bar_chart(timestamps, generic.energy_demand_forecast, "DHW energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
+        return bar_chart(timestamps, generic.energy_demand_forecast, "DHW Tank energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
     return None

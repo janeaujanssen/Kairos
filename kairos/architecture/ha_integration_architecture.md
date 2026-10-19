@@ -129,7 +129,7 @@ The `POST /optimize` request follows `OptimizationRequest` in `kairos/openapi.ya
 
 ## Response
 
-The response follows `OptimizationResponse`: `status`, `objective_cost`, `time_step_minutes`, and `assets` keyed by asset ID. Each asset contains a `setpoint`, `unit`, and timestamped `schedule` of `{time, value}` points; storage assets also contain `soc_schedule`, with one end-of-interval point per time step (the current SoC is not included). Power values follow the backend sign convention. The optimizer returns schedules for the grid, storage, and active controllable loads; PV and base load are inputs, not scheduled assets.
+The response follows `OptimizationResponse`: `status`, `objective_cost`, `time_step_minutes`, and `assets` keyed by asset ID. Each asset contains a `setpoint`, `unit`, and timestamped `schedule` of `{time, value}` points; storage assets also contain `soc_schedule`, with one end-of-interval point per time step (the current SoC is not included). Power values follow the backend sign convention. The optimizer returns schedules for the Grid, storage, and active Controllable Loads; Solar and Base Load are inputs, not scheduled assets.
 
 # End-to-End Workflow
 ## Configuration
@@ -152,22 +152,22 @@ Configuration happens once, in the integration's config flow, and is designed so
 
 | Asset | From HA entities (dynamic) | Entered once (static) |
 |---|---|---|
-| **Grid** | Current power; import price (+ forecast attribute, required); export price (+ forecast attribute, required) | Max import power, max export power |
-| **PV** | Current power; forecast attribute (required) | none |
-| **Base load** | Current power; forecast attribute (required) | none |
-| **Controllable load** | Current power (optional) | Average power, energy demand, earliest start, latest finish (each a constant or bound to a helper entity) |
-| **Home battery** | State of charge | Capacity, min/max SoC, max charge/discharge power, efficiencies, passive discharge |
-| **EV battery** | State of charge | As home battery, plus vehicle efficiency, round trip distance, departure and arrival time (fixed daily time or a datetime entity) |
-| **DHW tank** | Current water temperature | Volume, min/max/comfort temperature, heat loss coefficient, heat pump power and COP, morning/evening peak demand and time |
-| **Building thermal mass** | Current indoor temperature | Floor area, thermal mass coefficient, weather compensation temperature, max comfort temperature, heating/cooldown rate, COP for +dT and default mode |
+| **Grid** | Import price (+ forecast attribute, required); export price (+ forecast attribute, required) | Max import power, max export power |
+| **Solar** | Forecast attribute (required) | none |
+| **Base Load** | Forecast attribute (required) | none |
+| **Controllable Load** | none | Average power, energy demand, earliest start, latest finish (each a constant or bound to a helper entity) |
+| **Home Battery** | State of charge | Capacity, min/max SoC, max charge/discharge power, efficiencies, passive discharge |
+| **EV Battery** | State of charge | As Home Battery, plus vehicle efficiency, round trip distance, departure and arrival time (fixed daily time or a datetime entity) |
+| **DHW Tank** | Current water temperature | Volume, min/max/comfort temperature, heat loss coefficient, heat pump power and COP, morning/evening peak demand and time |
+| **Building Thermal Mass** | Current indoor temperature | Floor area, thermal mass coefficient, weather compensation temperature, max comfort temperature, heating/cooldown rate, COP for +dT and default mode |
 
 Details of the selectors:
 
-- **Forecasts** use HA's `attribute` selector on the chosen entity, because forecast formats differ between integrations and live in entity attributes. If no forecast attribute is selected, the App holds the current value constant over the horizon. This is the intended behavior for fixed tariffs and is the baseline for a base load without a forecast. PV is the exception: it requires a forecast.
+- **Forecasts** use HA's `attribute` selector on the chosen entity, because forecast formats differ between integrations and live in entity attributes. If no forecast attribute is selected, the App holds the current value constant over the horizon. This is the intended behavior for fixed tariffs and is the baseline for a Base Load without a forecast. Solar is the exception: it requires a forecast.
 - **Unit hints** are read automatically from each entity's `unit_of_measurement`. The user is never asked for units.
 - **Sign hint.** Grid power is the only entity with an ambiguous sign, so the flow asks once: "Positive means import" or "Positive means export".
 - **Validation.** The flow checks that each entity exists, that its unit matches the expected dimension (power, energy, percentage, temperature, price per energy), and that the forecast attribute is present and non-empty.
-- **Base load.** The selected entity represents the household's electrical consumption excluding every device modelled elsewhere in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). This is the residual household demand derived from historical data with modelled devices already excluded. 
+- **Base Load.** The selected entity represents the household's electrical consumption excluding every device modelled elsewhere in Kairos (battery and EV charging, DHW and building heat pumps, Controllable Loads). This is the residual household demand derived from historical data with modelled devices already excluded. 
 - **Asset IDs.** Each subentry has a stable `id` (derived from its name at creation). It never changes afterwards, so history in the dashboard and the exposed entities stay consistent.
 
 A manual trigger is available as the action `kairos.run_optimization`, for testing or for running after a change of settings.
@@ -195,9 +195,8 @@ The integration builds one `POST /optimize` request from the snapshot. Shown bel
     {
       "id": "grid_1",
       "name": "Main Grid Connection",
-      "current_power": 1200,
-      "max_import_power": 11000,
-      "max_export_power": 11000,
+      "max_import_power": 17300,
+      "max_export_power": 17300,
       "power_forecast": [
         0
       ],
@@ -321,13 +320,13 @@ Every controllable asset in the schedule gets a **setpoint sensor**. The integra
 | Entity | State | Attributes |
 |---|---|---|
 | `sensor.kairos_<asset>_setpoint` | Setpoint for the current time step [W], following the backend sign convention (storage: + charge, − discharge; loads ≥ 0) | `schedule`, `time_step_minutes`, `optimization_id`, `optimized_at` |
-| `sensor.kairos_<asset>_mode` (building thermal mass only) | `charge` (+dT), `neutral` (0), `discharge` (−dT) | same as above |
+| `sensor.kairos_<asset>_mode` (Building Thermal Mass only) | `charge` (+dT), `neutral` (0), `discharge` (−dT) | same as above |
 | `sensor.kairos_status` (diagnostic) | `optimal`, `feasible`, `infeasible`, `error` | `last_run`, `duration`, `consecutive_failures` |
 | `sensor.kairos_objective_cost` (diagnostic) | Objective cost of the latest optimization | `optimization_id` |
 
 The `schedule` attribute is a list of `{ "time": <ISO 8601 timestamp>, "value": <W> }` entries covering the whole horizon, so a user can chart or template against it.
 
-The building thermal mass is controlled through a heat pump temperature offset rather than a power level. Its setpoint sensor still carries the planned power in W, but the **mode** sensor is the one automations should use: a positive value maps to `charge`, a negative value to `discharge`, and zero to `neutral`.
+Building Thermal Mass is controlled through a heat pump temperature offset rather than a power level. Its setpoint sensor still carries the planned power in W, but the **mode** sensor is the one automations should use: a positive value maps to `charge`, a negative value to `discharge`, and zero to `neutral`.
 
 **Advancing through the schedule.** The integration runs a step clock aligned to the time-step grid. At each boundary it sets the state of every setpoint entity to the next scheduled value, without calling the App. A new optimization replaces the stored schedule whenever one completes. If the schedule runs out (the App has been unreachable for the whole horizon), the setpoint entities become `unavailable`, so automations never act on an expired schedule.
 
@@ -336,7 +335,7 @@ The building thermal mass is controlled through a heat pump temperature offset r
 Applying setpoints is entirely the user's responsibility. The integration only guarantees that the setpoint entities have a meaningful state or are `unavailable`. A typical automation reacts to the entity and translates the setpoint into whatever the device accepts. The entity IDs below are placeholders for the user's own battery integration.
 
 ```yaml
-alias: Kairos - apply home battery setpoint
+alias: Kairos - apply Home Battery setpoint
 triggers:
   - trigger: state
     entity_id: sensor.kairos_home_battery_setpoint

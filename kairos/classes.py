@@ -15,7 +15,6 @@ from datetime import datetime
 class Source:
     id: str
     name: str
-    current_power: float = 0.0  # W
 
 
 @dataclass

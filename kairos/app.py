@@ -26,13 +26,13 @@ st.set_page_config(page_title="Kairos - Easy, optimized energy scheduling for Ho
 # ---------------------------------------------------------------------------
 ASSET_TYPES = {
     "grid": {"icon": "⚡", "label": "Grid", "single": True},
-    "pv": {"icon": "🔆", "label": "PV", "single": False},
-    "base_load": {"icon": "🏠", "label": "Base load", "single": True},
-    "controllable_load": {"icon": "🔌", "label": "Controllable load", "single": False},
-    "home_battery": {"icon": "🔋", "label": "Home battery", "single": False},
-    "ev_battery": {"icon": "🚗", "label": "EV battery", "single": False},
-    "dhw_tank": {"icon": "💧", "label": "DHW tank", "single": False},
-    "building_thermal_mass": {"icon": "🏢", "label": "Building thermal mass", "single": False},
+    "pv": {"icon": "🔆", "label": "Solar", "single": False},
+    "base_load": {"icon": "🏠", "label": "Base Load", "single": True},
+    "controllable_load": {"icon": "🔌", "label": "Controllable Load", "single": False},
+    "home_battery": {"icon": "🔋", "label": "Home Battery", "single": False},
+    "ev_battery": {"icon": "🚗", "label": "EV Battery", "single": False},
+    "dhw_tank": {"icon": "💧", "label": "DHW Tank", "single": False},
+    "building_thermal_mass": {"icon": "🏢", "label": "Building Thermal Mass", "single": False},
 }
 STORAGE_TYPES = ("home_battery", "ev_battery", "dhw_tank", "building_thermal_mass")
 
@@ -47,11 +47,10 @@ _BATTERY_COMMON = [
 
 PHYSICAL_FIELDS = {
     "grid": [
-        ("current_power", "Current power [W] (+import, -export)", 0.0, "temp"),
         ("max_import_power", "Max import power [W]", 11000.0, "num"),
         ("max_export_power", "Max export power [W]", 11000.0, "num"),
     ],
-    "pv": [("current_power", "Current power [W]", 0.0, "num")],
+    "pv": [],
     "base_load": [],
     "controllable_load": [
         ("average_power", "Average power [W]", 1500.0, "num"),
@@ -186,12 +185,12 @@ with st.sidebar:
     with st.expander("Sign Convention Reference"):
         st.markdown(
             "- **Grid Power**: +import, −export\n"
-            "- **PV Power**: +production\n"
-            "- **Battery Power**: +charge, −discharge\n"
-            "- **DHW Battery Power**: +charge, −discharge\n"
-            "- **Building Battery Power**: +charge, −discharge\n"
-            "- **Load Power**: +consumption\n"
-            "- Energy balance: Grid + PV = Load + Storage at every timestep"
+            "- **Solar Power**: +production\n"
+            "- **Home Battery and EV Battery Power**: +charge, −discharge\n"
+            "- **DHW Tank Power**: +charge, −discharge\n"
+            "- **Building Thermal Mass Power**: +charge, −discharge\n"
+            "- **Base Load and Controllable Load Power**: +consumption\n"
+            "- Energy balance: Grid + Solar = Base Load + Controllable Load + Storage at every timestep"
         )
 
     st.subheader("Asset Enablement Toggles")
@@ -380,7 +379,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
     by_type = lambda t: [(a, p, g) for a, p, g in entries if a["type"] == t]
     grid, base_load = by_type("grid"), by_type("base_load")
     if not grid or not base_load:
-        st.session_state.result = {"error": "Add and enable a Grid and a Base load asset."}
+        st.session_state.result = {"error": "Add and enable a Grid and a Base Load asset."}
         return
     if any(g is None for _, _, g in entries):
         st.session_state.result = {"error": "Fix the invalid asset inputs first."}

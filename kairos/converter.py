@@ -77,7 +77,6 @@ def convert_grid(data: dict[str, Any]) -> Grid:
     return Grid(
         id=data["id"],
         name=data["name"],
-        current_power=data["current_power"],
         max_import_power=data["max_import_power"],
         max_export_power=data["max_export_power"],
         import_price_forecast=data["import_price_forecast"],
@@ -90,7 +89,6 @@ def convert_pv(data: dict[str, Any]) -> PV:
     return PV(
         id=data["id"],
         name=data["name"],
-        current_power=data["current_power"],
         power_forecast=data["power_forecast"],
     )
 

@@ -137,7 +137,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PV'
-          description: PV systems (optional).
+          description: Solar systems (optional).
         base_load:
           $ref: '#/components/schemas/BaseLoad'
         controllable_loads:
@@ -163,7 +163,6 @@ components:
       required:
         - id
         - name
-        - current_power
         - max_import_power
         - max_export_power
         - import_price_forecast
@@ -175,10 +174,6 @@ components:
         name:
           type: string
           example: "Main Grid Connection"
-        current_power:
-          type: number
-          description: Current power in Watts (+ for import, - for export).
-          example: 1200.0
         max_import_power:
           type: number
           description: Max import power constraint [W].
@@ -203,7 +198,6 @@ components:
       required:
         - id
         - name
-        - current_power
         - power_forecast
       properties:
         id:
@@ -211,11 +205,7 @@ components:
           example: "pv_1"
         name:
           type: string
-          example: "Rooftop PV"
-        current_power:
-          type: number
-          description: Current production power in Watts.
-          example: 800.0
+          example: "Rooftop Solar"
         power_forecast:
           type: array
           description: Power generation forecast [W] per time step. Array has one entry per time step; each entry represents the average power generated during the period starting at that time step.
@@ -307,7 +297,7 @@ components:
           type: string
           enum: [home_battery]
           example: "home_battery"
-          description: Physical storage type (home battery).
+          description: Physical storage type (Home Battery).
         current_soc:
           type: number
           minimum: 0.0
@@ -383,7 +373,7 @@ components:
           type: string
           enum: [ev_battery]
           example: "ev_battery"
-          description: Physical storage type (EV battery).
+          description: Physical storage type (EV Battery).
         current_soc:
           type: number
           minimum: 0.0
@@ -1002,7 +992,7 @@ components:
           type: string
           enum: [btm]
           example: "btm"
-          description: Storage class type (building thermal mass).
+          description: Storage class type (Building Thermal Mass).
         current_soc:
           type: number
           minimum: 0.0
@@ -1036,14 +1026,14 @@ components:
         passive_discharge_power:
           type: number
           example: 0.0
-          description: Passive standby losses [W]. Not relevant for building thermal mass.
+          description: Passive standby losses [W]. Not relevant for Building Thermal Mass.
         discharge_to_electrical_network:
           type: boolean
           example: false
           description: True for electrical storage, False for thermal storage.
         energy_demand_forecast:
           type: array
-          description: Forecasted external energy demand [Wh] per time step. Not relevant for building thermal mass. Array has one entry per time step; each entry represents the energy demand during the period starting at that time step.
+          description: Forecasted external energy demand [Wh] per time step. Not relevant for Building Thermal Mass. Array has one entry per time step; each entry represents the energy demand during the period starting at that time step.
           items:
             type: number
         availability_window:

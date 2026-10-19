@@ -3,9 +3,9 @@
 
 > **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
-> - PV curtailment: PV is a decision variable that allows reducing PV output when necessary, not to be implemented yet.
+> - Solar curtailment: Solar is a decision variable that allows reducing Solar output when necessary, not to be implemented yet.
 > - Not super happy with Building Thermal Mass implementation:
->   - Building thermal mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
+>   - Building Thermal Mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
 # Contents
 
 - [Sign Convention](#sign-convention)
@@ -28,7 +28,7 @@ All power flows follow a **consistent sign convention** to eliminate ambiguity i
 
 | Asset Class | Positive Direction | Negative Direction | Example |
 |---|---|---|---|
-| **Source Power** | Supply (Grid import, PV production) | Absorb (Grid export) | +5 kW = buying/producing, −3 kW = selling |
+| **Source Power** | Supply (Grid import, Solar production) | Absorb (Grid export) | +5 kW = buying/producing, −3 kW = selling |
 | **Storage Power** | Charge (absorbing energy) | Discharge (supplying energy) | +2 kW = charging, −2 kW = discharging |
 | **Load Power** | Consumption (drawing energy) | — | Always ≥ 0 (demand is fixed at forecast) |
 
@@ -51,10 +51,10 @@ Example:
 
 | Sources   | Loads             | Storage        |
 |-----------|-------------------|----------------|
-| Grid      | Household Demand  | Home Battery   |
-| Solar PV  | Dishwasher        | EV Battery     |
+| Grid      | Base Load         | Home Battery   |
+| Solar     | Dishwasher        | EV Battery     |
 |           | Washing Machine   | DHW Tank       |
-|           | Pool Pump         | Building Mass  |
+|           | Pool Pump         | Building Thermal Mass |
 
 This abstraction allows the optimizer to reason about energy flows without requiring knowledge of the underlying technology.
 Each asset class has attributes that either describe its current state, act as a constraint or contain forecasts.
@@ -66,16 +66,11 @@ Sources provide energy to the household energy system.
 Typical examples:
 
 - Grid connection
-- Solar PV system
+- Solar system
 
 ### Attributes
 
-Every source shares a general attribute. Attributes that depend on the source type are defined per source class.
-
-#### General attributes
-
-##### State
-- Current Power [W]
+Attributes are defined per source class.
 
 #### Class specific attributes
 
@@ -88,13 +83,13 @@ Every source shares a general attribute. Attributes that depend on the source ty
 
 Loads consume energy within the household. There are two types of loads:
 
-1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (battery and EV charging, DHW and building heat pumps, controllable loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
+1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pumps, Controllable Loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
 2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
 
 Typical examples:
 
 - Base Load (residual household demand)
-- Controllable loads (e.g., washing machine, dishwasher, pool pump)
+- Controllable Loads (e.g., washing machine, dishwasher, pool pump)
 
 ### Attributes
 
@@ -123,7 +118,7 @@ Typical examples:
 
 - Home Battery
 - EV Battery
-- Domestic Hot Water (DHW) Tank
+- DHW Tank
 - Building Thermal Mass
 
 ### Attributes
@@ -145,25 +140,25 @@ Every storage asset shares a set of general attributes. Attributes that depend o
 - Discharge to Electrical Network [-] *(yes/no, yes for electrical storage, no for thermal storage)*
 
 ##### Forecasts (value per time step)
-- Energy Demand Forecast [Wh] *(typically EV battery or DHW storage)*
+- Energy Demand Forecast [Wh] *(typically EV Battery or DHW Tank)*
 - Availability Window [-] *(1/0 for available/unavailable, typically EV)*
 
 #### Class specific attributes
 
 | Storage class | Class specific attributes |
 |---|---|
-| `Battery` (home battery, EV battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
-| `DHW` (DHW tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
-| `BTM` (building thermal mass) | Charge Power [W] *(discrete, electric power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>Default Efficiency [-] *(heat pump COP in default curve mode)* |
+| `Battery` (Home Battery, EV Battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
+| `DHW` (DHW Tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
+| `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, electric power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>Default Efficiency [-] *(heat pump COP in default curve mode)* |
 
 ## Storage Classes
 
 The storage classes provide a representation for all types of storage assets, allowing the optimizer to handle them in a consistent manner regardless of their physical implementation.
 All classes share the general storage attributes. Each class adds the attributes that are specific to its physical behaviour.
-The attributes might make sense for a normal battery, but less for thermal storage like DHW tanks or building thermal mass. Therefore, a conversion layer is required to map the physical input characteristics of each storage type to the class attributes.
+The attributes might make sense for a normal battery, but less for thermal storage like DHW Tanks or Building Thermal Mass. Therefore, a conversion layer is required to map the physical input characteristics of each storage type to the class attributes.
 
 ### Conversion Layer for Home Battery
-For a normal home battery, the conversion layer is straightforward as the physical parameters directly map to the `Battery` class attributes.
+For a normal Home Battery, the conversion layer is straightforward as the physical parameters directly map to the `Battery` class attributes.
 
 ```python
 # Physical input parameters:
@@ -200,7 +195,7 @@ home_battery = Battery(
 ```
 
 ### Conversion Layer for EV Battery
-For an EV battery, the conversion layer maps the physical parameters of the EV battery to the `Battery` class attributes. The main difference compared to a home battery is that it has additional physical input parameters to define the energy demand forecast and the availability window.
+For an EV Battery, the conversion layer maps the physical parameters of the EV Battery to the `Battery` class attributes. The main difference compared to a Home Battery is that it has additional physical input parameters to define the energy demand forecast and the availability window.
 
 ```python
 # Physical input parameters:
@@ -240,7 +235,7 @@ ev_battery = Battery(
 )
 ```
 
-### Conversion Layer for DHW Storage
+### Conversion Layer for DHW Tank
 The optimal charging of the DHW tank is driven by the energy demand forecast. This can be a proper forecast but a simple typical estimate like a morning and evening energy demand can be sufficient for most cases.
 
 ```python
@@ -280,7 +275,7 @@ dhw_tank = DHW(
 ```
 
 ### Conversion Layer for Building Thermal Mass
-As a simple approach to controlling the building thermal mass using a heat pump, we use a temperature offset on the weather compensation curve. The default curve is for example set to achieve a consistent indoor temperature of 20°C. By adjusting the curve up or down, we can effectively charge or discharge the building's thermal mass. Shifting energy usage from peak to off-peak periods. So the heat pump is controlled by setting it in one of three modes: +dT (charging), -dT (discharging), and 0 (neutral). The heating rate and cooldown rate of the +dT and -dT modes are empirically determined by the user. The thermal mass coefficient doesn't need to be accurately known for this control strategy as it is only used by the optimizer to estimate the amount of energy that can be shifted through preheating. The actual control behavior is determined by the empirically measured heating and cooldown rates.
+As a simple approach to controlling the Building Thermal Mass using a heat pump, we use a temperature offset on the weather compensation curve. The default curve is for example set to achieve a consistent indoor temperature of 20°C. By adjusting the curve up or down, we can effectively charge or discharge the building's thermal mass. Shifting energy usage from peak to off-peak periods. So the heat pump is controlled by setting it in one of three modes: +dT (charging), -dT (discharging), and 0 (neutral). The heating rate and cooldown rate of the +dT and -dT modes are empirically determined by the user. The thermal mass coefficient doesn't need to be accurately known for this control strategy as it is only used by the optimizer to estimate the amount of energy that can be shifted through preheating. The actual control behavior is determined by the empirically measured heating and cooldown rates.
 
 ```python
 # Physical input parameters:
@@ -320,7 +315,7 @@ building_thermal_mass = BTM(
 ## High Level Process
 
 The optimizer determines the optimal operating strategy for all controllable assets over a planning horizon. It takes as input the current states, constraints and forecasts of all assets. For each time step, the optimizer then determines:
-- The optimal power setpoints for each controllable asset (e.g., battery, EV, DHW, building thermal mass, controllable loads)
+- The optimal power setpoints for each controllable asset (e.g., Home Battery, EV Battery, DHW Tank, Building Thermal Mass, Controllable Loads)
 
 These are the decision variables. Decision variables represent the quantities the optimizer is allowed to change in order to achieve the optimization objective.
 
@@ -335,15 +330,15 @@ The optimizer basically optimizes for a minimum or maximum of a certain objectiv
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
 
 ### Building Thermal Mass Discharge Benefit
-But because of our way of implementing the building thermal mass this objective function is not yet complete.
+But because of our way of implementing the Building Thermal Mass this objective function is not yet complete.
 
-- When the building thermal mass is charged, extra energy is used, and this is represented in the objective function with: Grid Import Energy x Import Price
-- When the building thermal mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no electrical energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
+- When the Building Thermal Mass is charged, extra energy is used, and this is represented in the objective function with: Grid Import Energy x Import Price
+- When the Building Thermal Mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no electrical energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
 
-So by pre-charging the building thermal mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
-This is in contrast with the DHW thermal storage, where the energy demand forecast dictates how much the storage should be charged, the economic benefit is then defined in the objective function by minimizing Grid Import Energy x Import Price.
+So by pre-charging the Building Thermal Mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
+This is in contrast with the DHW Tank, where the energy demand forecast dictates how much the storage should be charged, the economic benefit is then defined in the objective function by minimizing Grid Import Energy x Import Price.
 
-To capture this benefit in the objective function, an additional term is introduced: Building Thermal Discharge Benefit (note that this term only applies to building thermal storage).
+To capture this benefit in the objective function, an additional term is introduced: Building Thermal Discharge Benefit (note that this term only applies to Building Thermal Mass).
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t})$$
 
@@ -378,9 +373,9 @@ With
 
 | Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
 |---|---|---|
-| Thermal, DHW tank | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the COP (`charge_efficiency` of the `DHW` class). |
-| Thermal, building thermal mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `default_efficiency` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
-| Electrical (home battery, EV battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
+| Thermal, DHW Tank | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the COP (`charge_efficiency` of the `DHW` class). |
+| Thermal, Building Thermal Mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW Tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `default_efficiency` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
+| Electrical (Home Battery, EV Battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
 ---
 ### Storage Mode Switching Penalty
 
@@ -438,7 +433,7 @@ Note: The Base Load is defined as the residual of total household consumption af
 
 $${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\text{discharge}}$$
 
-For thermal storage (DHW tank, building thermal mass), discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance.
+For thermal storage (DHW Tank, Building Thermal Mass), discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance.
 
 ### Asset Constraints
 
