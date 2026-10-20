@@ -35,17 +35,36 @@ completed_load = ControllableLoad(
     "Completed load",
     average_power=1000.0,
     energy_demand=3000.0,
-    run_started_at=run_start - timedelta(hours=4),
+    run_started_at=run_start,
 )
 completed_run = optimizer.add_controllable_load(
     None,
     completed_load,
     0,
-    run_start,
+    run_start + timedelta(hours=10),
     1.0,
     4,
 )
-assert completed_run == [0.0, 0.0, 0.0, 0.0], "a completed run was scheduled again"
+assert completed_run == [0.0, 0.0, 0.0, 0.0], "a run completed earlier today was scheduled again"
+previous_day_load = ControllableLoad(
+    "previous-day-load",
+    "Previous day load",
+    average_power=1000.0,
+    energy_demand=3000.0,
+    run_started_at=run_start - timedelta(hours=4),
+)
+previous_day_prob = pulp.LpProblem("previous_day", pulp.LpMinimize)
+optimizer.add_controllable_load(previous_day_prob, previous_day_load, 0, run_start, 1.0, 4)
+assert len(previous_day_prob.constraints) == 1, "a run that ended on an earlier day was not rescheduled"
+crossing_load = ControllableLoad(
+    "crossing-load",
+    "Crossing load",
+    average_power=1000.0,
+    energy_demand=3000.0,
+    run_started_at=run_start - timedelta(hours=2),
+)
+crossing_run = optimizer.add_controllable_load(None, crossing_load, 0, run_start, 1.0, 4)
+assert crossing_run == [1000.0, 0.0, 0.0, 0.0], "a run from an earlier day still in progress was interrupted"
 print("Started controllable loads run to completion without restarting: OK")
 
 optimize = getattr(optimizer, "optimize", None)

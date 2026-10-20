@@ -154,7 +154,10 @@ def add_controllable_load(
             raise ValueError(f"Load {load.id!r} run_started_at cannot be after the optimization timestamp")
         run_end = load.run_started_at + timedelta(hours=run_steps * dt)
         remaining_steps = max(0, math.ceil(_steps_since(start, run_end, dt) - 1e-9))
-        return [load.average_power if t < remaining_steps else 0.0 for t in range(n_steps)]
+        # Once ended, a run started on an earlier day no longer blocks scheduling.
+        started_today = load.run_started_at.astimezone(start.tzinfo).date() >= start.date()
+        if remaining_steps > 0 or started_today:
+            return [load.average_power if t < remaining_steps else 0.0 for t in range(n_steps)]
 
     first = 0
     if load.earliest_start_time is not None:

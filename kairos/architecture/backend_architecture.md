@@ -83,7 +83,7 @@ Attributes are defined per source class.
 
 Loads consume energy within the household. There are two types of loads:
 
-1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pumps, Controllable Loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
+1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (e.g. Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pumps, Controllable Loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
 2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
 
 Typical examples:
@@ -108,7 +108,7 @@ Every load shares a set of general attributes. Attributes that depend on the loa
 | Load class | Class specific attributes |
 |---|---|
 | `BaseLoad` (household demand) | Power Forecast [W per time step] |
-| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional while a run is active]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
+| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
 
 ## Storage
 
@@ -469,9 +469,9 @@ This ensures that energy stored in an asset remains physically consistent over t
 
 ### Controllable Load Run Continuity
 
-A controllable load without `run_started_at` is scheduled as one uninterrupted run within its operating window. When `run_started_at` is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again as the same run.
+A controllable load without `run_started_at` is scheduled as one uninterrupted run within its operating window. When `run_started_at` is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again on the day the run started. If the run started on an earlier day, the load is scheduled normally within its operating window.
 
-`run_started_at` must be a timezone-aware timestamp no later than the optimization timestamp. The caller should omit it when there is no active run; completed jobs should no longer be submitted as pending controllable loads.
+`run_started_at` must be a timezone-aware timestamp no later than the optimization timestamp. It holds the load's latest start time, so the caller does not need to clear it after the run completes.
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
 

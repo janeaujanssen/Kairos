@@ -258,8 +258,10 @@ components:
           type: string
           format: date-time
           description: >-
-            Actual start timestamp for a run already in progress. The optimizer keeps the load
-            on at average_power until its fixed run duration elapses; omit when no run is active.
+            Latest actual start timestamp of this load. While the run is in progress, the optimizer
+            keeps the load on at average_power until its fixed run duration elapses. Clearing it after
+            the run ends is not required: the load stays off for the rest of that day and is scheduled
+            normally from the next day.
         earliest_start_time:
           type: string
           format: date-time
