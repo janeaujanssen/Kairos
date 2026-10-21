@@ -86,6 +86,7 @@ def power_flow_chart(
     net_grid_w: list[float], pv_w: list[float], import_price: list[float], export_price: list[float],
     storage_types_by_id: dict[str, str] | None = None,
     controllable_ids: list[str] | None = None, names_by_id: dict[str, str] | None = None,
+    base_load_name: str = "Base Load", pv_name: str = "Solar Production", grid_name: str = "Net Grid Power",
 ) -> go.Figure:
     """Create power flow chart with load, storage, and grid per UI architecture."""
     fig = go.Figure()
@@ -98,7 +99,7 @@ def power_flow_chart(
     fig.add_hline(y=0, line_dash="dash", line_color=GRAY, layer="below")
 
     # Base Load - demand side
-    fig.add_bar(x=timestamps, y=load_w, name="Base Load", marker_color=asset_color("base_load"),
+    fig.add_bar(x=timestamps, y=load_w, name=base_load_name, marker_color=asset_color("base_load"),
                 hovertemplate="%{y:.1f} W<extra></extra>")
 
     # Controllable Loads - one bar per asset so each instance can use its palette color
@@ -119,9 +120,9 @@ def power_flow_chart(
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
     # Supply side - Grid and Solar (lines)
-    fig.add_scatter(x=timestamps, y=pv_w, name="Solar Production", line=dict(color=asset_color("pv"), dash="solid"), line_shape="hvh",
+    fig.add_scatter(x=timestamps, y=pv_w, name=pv_name, line=dict(color=asset_color("pv"), dash="solid"), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
-    fig.add_scatter(x=timestamps, y=net_grid_w, name="Net Grid Power", line=dict(color=asset_color("grid")), line_shape="hvh",
+    fig.add_scatter(x=timestamps, y=net_grid_w, name=grid_name, line=dict(color=asset_color("grid")), line_shape="hvh",
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
 
@@ -153,7 +154,8 @@ def grid_step_costs(
 
 
 def cost_analysis_chart(
-    timestamps, net_grid_w: list[float], import_price: list[float], export_price: list[float], step_hours: float
+    timestamps, net_grid_w: list[float], import_price: list[float], export_price: list[float], step_hours: float,
+    grid_name: str = "Grid",
 ) -> go.Figure:
     """Create cost analysis chart with grid costs and cumulative cost per UI architecture."""
     step_cost = grid_step_costs(net_grid_w, import_price, export_price, step_hours)
@@ -161,13 +163,13 @@ def cost_analysis_chart(
     fig = go.Figure()
 
     fig.add_hline(y=0, line_dash="dash", line_color=GRAY, layer="below")
-    
+
     # Grid cost (import) - positive values
-    fig.add_bar(x=timestamps, y=[max(c, 0) for c in step_cost], name="Grid cost", marker_color=COST_COLORS["cost"],
+    fig.add_bar(x=timestamps, y=[max(c, 0) for c in step_cost], name=f"{grid_name} cost", marker_color=COST_COLORS["cost"],
                 hovertemplate="%{y:.2f}<extra></extra>")
-    
+
     # Grid profit (export) - negative values
-    fig.add_bar(x=timestamps, y=[min(c, 0) for c in step_cost], name="Grid profit", marker_color=COST_COLORS["profit"],
+    fig.add_bar(x=timestamps, y=[min(c, 0) for c in step_cost], name=f"{grid_name} profit", marker_color=COST_COLORS["profit"],
                 hovertemplate="%{y:.2f}<extra></extra>")
     
     # Cumulative cost line on secondary y-axis

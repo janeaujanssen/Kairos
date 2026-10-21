@@ -421,6 +421,9 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "export_price": grid[0][1]["export_price_forecast"],
         "base_load": base_load[0][1]["power_forecast"],
         "pv": pv_total,
+        "grid_name": grid[0][0]["name"],
+        "base_load_name": base_load[0][0]["name"],
+        "pv_name": ", ".join(a["name"] for a, _, _ in by_type("pv")) or "Solar Production",
         "grid_id": grid[0][0]["id"],
         "controllable_ids": [a["id"] for a, _, _ in by_type("controllable_load")],
         "storage_ids": [a["id"] for a, _, _ in storage],
@@ -470,6 +473,9 @@ def refresh_latest_result() -> None:
         "export_price": grid["export_price_forecast"],
         "base_load": latest_request["base_load"]["power_forecast"],
         "pv": pv_total or [0.0] * result_steps,
+        "grid_name": grid["name"],
+        "base_load_name": latest_request["base_load"]["name"],
+        "pv_name": ", ".join(p["name"] for p in latest_request.get("pv", [])) or "Solar Production",
         "grid_id": grid["id"],
         "controllable_ids": [item["id"] for item in latest_request.get("controllable_loads", [])],
         "storage_ids": [item["id"] for item in latest_request.get("storage", [])],
@@ -597,6 +603,7 @@ with tab_opt:
                 ts, result["base_load"], result["storage_ids"], schedule, net_grid, result["pv"],
                 result["import_price"], result["export_price"], result["storage_types_by_id"],
                 result["controllable_ids"], names_by_id=result["names_by_id"],
+                base_load_name=result["base_load_name"], pv_name=result["pv_name"], grid_name=result["grid_name"],
             ))
             st.subheader("Cost Analysis")
 
@@ -604,7 +611,7 @@ with tab_opt:
                 net_grid, result["import_price"], result["export_price"], dt
             ))
             st.metric("Grid energy cost over planning horizon", f"{horizon_cost:.2f}")
-            viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt))
+            viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt, result["grid_name"]))
             st.subheader("State of Charge Trajectories")
             viz.show(viz.soc_chart(
                 soc_timestamps, result["storage_ids"], soc, generics, result["storage_types_by_id"],
