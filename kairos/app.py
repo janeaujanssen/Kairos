@@ -470,6 +470,10 @@ def refresh_latest_result() -> None:
         "grid_id": grid["id"],
         "controllable_ids": [item["id"] for item in latest_request.get("controllable_loads", [])],
         "storage_ids": [item["id"] for item in latest_request.get("storage", [])],
+        "names_by_id": {
+            item["id"]: item["name"]
+            for item in [*latest_request.get("controllable_loads", []), *latest_request.get("storage", [])]
+        },
         "storage_types_by_id": {
             item["id"]: item["storage_type"] for item in latest_request.get("storage", [])
         },
@@ -589,7 +593,7 @@ with tab_opt:
             viz.show(viz.power_flow_chart(
                 ts, result["base_load"], result["storage_ids"], schedule, net_grid, result["pv"],
                 result["import_price"], result["export_price"], result["storage_types_by_id"],
-                result["controllable_ids"],
+                result["controllable_ids"], names_by_id=result["names_by_id"],
             ))
             st.subheader("Cost Analysis")
 
@@ -600,5 +604,6 @@ with tab_opt:
             viz.show(viz.cost_analysis_chart(ts, net_grid, result["import_price"], result["export_price"], dt))
             st.subheader("State of Charge Trajectories")
             viz.show(viz.soc_chart(
-                soc_timestamps, result["storage_ids"], soc, generics, result["storage_types_by_id"]
+                soc_timestamps, result["storage_ids"], soc, generics, result["storage_types_by_id"],
+                names_by_id=result["names_by_id"],
             ))

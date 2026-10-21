@@ -85,12 +85,13 @@ def power_flow_chart(
     timestamps, load_w: list[float], storage_ids: list[str], storage_schedule_w: dict[str, list[float]],
     net_grid_w: list[float], pv_w: list[float], import_price: list[float], export_price: list[float],
     storage_types_by_id: dict[str, str] | None = None,
-    controllable_ids: list[str] | None = None,
+    controllable_ids: list[str] | None = None, names_by_id: dict[str, str] | None = None,
 ) -> go.Figure:
     """Create power flow chart with load, storage, and grid per UI architecture."""
     fig = go.Figure()
     storage_types_by_id = storage_types_by_id or {}
     controllable_ids = controllable_ids or []
+    names_by_id = names_by_id or {}
     color_indices = _storage_color_indices(storage_ids, storage_types_by_id)
 
     # Zero line reference
@@ -105,7 +106,7 @@ def power_flow_chart(
         if controllable_id not in storage_schedule_w:
             continue
         fig.add_bar(
-            x=timestamps, y=storage_schedule_w[controllable_id], name=controllable_id,
+            x=timestamps, y=storage_schedule_w[controllable_id], name=names_by_id.get(controllable_id, controllable_id),
             marker_color=asset_color("controllable_load", color_index),
             hovertemplate="%{y:.1f} W<extra></extra>",
         )
@@ -114,7 +115,7 @@ def power_flow_chart(
     for storage_id in storage_ids:
         asset_type = storage_types_by_id.get(storage_id, "home_battery")
         color = asset_color(asset_type, color_indices[storage_id])
-        fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=storage_id, marker_color=color,
+        fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=names_by_id.get(storage_id, storage_id), marker_color=color,
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
     # Supply side - Grid and Solar (lines)
@@ -184,11 +185,12 @@ def cost_analysis_chart(
 
 def soc_chart(
     timestamps, storage_ids: list[str], soc_by_storage: dict[str, list[float]], generics_by_id: dict,
-    storage_types_by_id: dict[str, str] | None = None,
+    storage_types_by_id: dict[str, str] | None = None, names_by_id: dict[str, str] | None = None,
 ) -> go.Figure:
     """Create state of charge trajectories chart for all storage assets per UI architecture."""
     fig = go.Figure()
     storage_types_by_id = storage_types_by_id or {}
+    names_by_id = names_by_id or {}
     color_indices = _storage_color_indices(storage_ids, storage_types_by_id)
     
     for storage_id in storage_ids:
@@ -201,13 +203,13 @@ def soc_chart(
         color = asset_color(asset_type, color_indices[storage_id])
         soc = soc_by_storage[storage_id]
         fig.add_scatter(
-            x=timestamps, y=[v * 100 for v in soc], name=storage_id, line=dict(color=color), line_shape="linear",
+            x=timestamps, y=[v * 100 for v in soc], name=names_by_id.get(storage_id, storage_id), line=dict(color=color), line_shape="linear",
             customdata=[v * generic.energy_capacity / 1000 for v in soc],
             hovertemplate="%{y:.1f} %  (%{customdata:.2f} kWh)",
         )
         for bound, label in ((generic.min_soc, "min"), (generic.max_soc, "max")):
             fig.add_hline(y=bound * 100, line_dash="dot", line_color=color,
-                          annotation_text=f"{storage_id} {label}", annotation_position="right")
+                          annotation_text=f"{names_by_id.get(storage_id, storage_id)} {label}", annotation_position="right")
     return style(fig, "SoC [%]", 350)
 
 
