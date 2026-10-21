@@ -102,16 +102,33 @@ def convert_base_load(data: dict[str, Any]) -> BaseLoad:
     )
 
 
-def convert_controllable_load(data: dict[str, Any]) -> ControllableLoad:
-    """Map a controllable load payload to `ControllableLoad`."""
+def _operating_window(start: datetime, earliest: time, latest: time) -> tuple[datetime, datetime]:
+    """Next daily window [earliest, latest] that is open at or after `start`."""
+    finish = datetime.combine(start.date(), latest, tzinfo=start.tzinfo)
+    if finish <= start:
+        finish += timedelta(days=1)
+    # Overnight window (earliest after latest) started on the day before its finish.
+    earliest_date = finish.date() - timedelta(days=1) if earliest > latest else finish.date()
+    return datetime.combine(earliest_date, earliest, tzinfo=start.tzinfo), finish
+
+
+def convert_controllable_load(data: dict[str, Any], start: datetime) -> ControllableLoad:
+    """Map a controllable load payload to `ControllableLoad`; daily HH:MM bounds become the next window after `start`."""
+    earliest_tod = data.get("earliest_start_time")
+    latest_tod = data.get("latest_finish_time")
+    if (earliest_tod is None) != (latest_tod is None):
+        raise ValueError("earliest_start_time and latest_finish_time must be given together")
+    earliest = latest = None
+    if earliest_tod is not None:
+        earliest, latest = _operating_window(start, _parse_time(earliest_tod), _parse_time(latest_tod))
     return ControllableLoad(
         id=data["id"],
         name=data["name"],
         average_power=data["average_power"],
         energy_demand=data["energy_demand"],
         run_started_at=_parse_optional_dt(data.get("run_started_at")),
-        earliest_start_time=_parse_optional_dt(data.get("earliest_start_time")),
-        latest_finish_time=_parse_optional_dt(data.get("latest_finish_time")),
+        earliest_start_time=earliest,
+        latest_finish_time=latest,
     )
 
 

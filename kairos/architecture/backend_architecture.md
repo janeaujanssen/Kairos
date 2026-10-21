@@ -108,7 +108,7 @@ Every load shares a set of general attributes. Attributes that depend on the loa
 | Load class | Class specific attributes |
 |---|---|
 | `BaseLoad` (household demand) | Power Forecast [W per time step] |
-| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
+| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional]<br>Earliest Start Time [time of day]<br>Latest Finish Time [time of day] |
 
 ## Storage
 

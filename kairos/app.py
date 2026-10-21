@@ -251,18 +251,6 @@ hours_of_day = [(start.hour + start.minute / 60 + i * step_h) % 24 for i in rang
 # ---------------------------------------------------------------------------
 # Payload building
 # ---------------------------------------------------------------------------
-def _operating_window_timestamps(
-    optimization_start: datetime, earliest: time, latest: time
-) -> tuple[datetime, datetime]:
-    """Map daily time-of-day bounds to the next operating window."""
-    finish = datetime.combine(optimization_start.date(), latest, tzinfo=optimization_start.tzinfo)
-    if finish <= optimization_start:
-        finish += timedelta(days=1)
-    start_date = finish.date() - timedelta(days=1) if earliest > latest else finish.date()
-    earliest_start = datetime.combine(start_date, earliest, tzinfo=optimization_start.tzinfo)
-    return earliest_start, finish
-
-
 def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
     """Assemble the API payload for one asset from its physical and forecast inputs."""
     payload = {"id": asset["id"], "name": asset["name"], **physical}
@@ -284,11 +272,8 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
         payload["power_forecast"] = fs.base_load_forecast(hours_of_day, **forecast)
     elif t == "controllable_load":
         payload["energy_demand"] = physical["average_power"] * payload.pop("runtime_h")
-        earliest_start, latest_finish = _operating_window_timestamps(
-            start, payload["earliest_start_time"], payload["latest_finish_time"]
-        )
-        payload["earliest_start_time"] = earliest_start.isoformat()
-        payload["latest_finish_time"] = latest_finish.isoformat()
+        payload["earliest_start_time"] = payload["earliest_start_time"].strftime("%H:%M")
+        payload["latest_finish_time"] = payload["latest_finish_time"].strftime("%H:%M")
         if payload["run_started_at"] is not None:
             payload["run_started_at"] = payload["run_started_at"].isoformat()
     elif t in STORAGE_TYPES:
@@ -315,7 +300,7 @@ def to_generic(asset_type: str, payload: dict):
     if asset_type == "base_load":
         return converter.convert_base_load(payload)
     if asset_type == "controllable_load":
-        return converter.convert_controllable_load(payload)
+        return converter.convert_controllable_load(payload, start)
     return converter.convert_storage(payload, start, step_h, n_steps)
 
 

@@ -264,12 +264,17 @@ components:
             normally from the next day.
         earliest_start_time:
           type: string
-          format: date-time
-          description: Earliest allowed start timestamp.
+          format: time
+          example: "07:00"
+          description: >-
+            Daily earliest allowed start time [HH:MM]. Must be given together with latest_finish_time.
+            The operating window is the next occurrence of [earliest, latest] at or after the optimization timestamp.
         latest_finish_time:
           type: string
-          format: date-time
-          description: Latest allowed finish timestamp.
+          format: time
+          example: "12:00"
+          description: >-
+            Daily latest allowed finish time [HH:MM]. If earlier than earliest_start_time, the window spans midnight.
 
     # --- PHYSICAL HOME BATTERY ---
     HomeBattery:

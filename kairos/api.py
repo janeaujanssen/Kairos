@@ -105,7 +105,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         sources = [converter.convert_grid(request.grid)]
         sources += [converter.convert_pv(p) for p in request.pv]
         loads = [converter.convert_base_load(request.base_load)]
-        loads += [converter.convert_controllable_load(l) for l in request.controllable_loads]
+        loads += [converter.convert_controllable_load(l, request.timestamp) for l in request.controllable_loads]
         storage = [storage_converter(s, n_steps) for s in request.storage]
         result = optimizer.optimize(
             sources=sources,
