@@ -424,6 +424,9 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "grid_id": grid[0][0]["id"],
         "controllable_ids": [a["id"] for a, _, _ in by_type("controllable_load")],
         "storage_ids": [a["id"] for a, _, _ in storage],
+        "names_by_id": {
+            a["id"]: a["name"] for a, _, _ in [*by_type("controllable_load"), *storage]
+        },
         "storage_types_by_id": {a["id"]: a["type"] for a, _, _ in storage},
         "generics": {a["id"]: g for a, _, g in storage},
     }
