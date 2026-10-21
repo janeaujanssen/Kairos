@@ -179,9 +179,6 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Simulation settings")
-    run_clicked = st.button("▶ Run simulation optimization", type="primary", width="stretch")
-
     with st.expander("Sign Convention Reference"):
         st.markdown(
             "- **Grid Power**: +import, −export\n"
@@ -191,61 +188,73 @@ with st.sidebar:
             "- **Building Thermal Mass Power**: +charge, −discharge\n"
             "- **Base Load and Controllable Load Power**: +consumption\n"
             "- Energy balance: Grid + Solar = Base Load + Controllable Load + Storage at every timestep"
-        )
+        )    
+    simulation_mode = st.toggle(
+        "Simulation mode",
+        value=False,
+        help="Show simulation inputs and the run button. Off shows only optimization results.",
+    )
+    run_clicked = False
+    if simulation_mode:
+        run_clicked = st.button("▶ Run simulation optimization", type="primary", width="stretch")
 
-    st.subheader("Asset Enablement Toggles")
-    if not st.session_state.assets:
-        st.caption("No assets yet. Add them in the Simulation inputs tab.")
-    for asset in st.session_state.assets:
-        info = ASSET_TYPES[asset["type"]]
-        asset["enabled"] = st.toggle(
-            f"{info['icon']} {asset['name']}", value=asset["enabled"], key=f"{asset['id']}_enabled"
-        )
 
-    st.subheader("Configuration")
-    horizon_h = st.number_input("Planning horizon [h]", 6, 48, 24, step=1)
-    interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
-    start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
-    time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
-    relative_mip_gap_percent = st.number_input(
-        "Relative MIP gap [%]",
-        min_value=0.0,
-        max_value=100.0,
-        value=0.0,
-        step=0.1,
-        format="%.3f",
-        help="Stop once the best schedule is within this relative gap of the best bound. Set to 0 to require CBC's optimality proof.",
-    )
-    switching_penalty = st.number_input(
-        "Switching penalty [currency units / mode change]",
-        min_value=0.0,
-        value=0.010,
-        step=0.001,
-        format="%.3f",
-        help="Softly discourages storage mode changes between timesteps. Set to 0 to disable.",
-    )
-    grid_peak_penalty = st.number_input(
-        "Grid peak penalty",
-        min_value=0.0,
-        value=0.1,
-        step=0.1,
-        format="%.2f",
-        help=(
-            "Dimensionless weight. At 0.40 currency/kWh with 15-minute steps, 0.1 means the "
-            "optimizer can accept up to 1 cent higher energy cost for a 1 kW lower grid peak. "
-            "Set to 0 to disable."
-        ),
-    )
+
+    if simulation_mode:
+        st.subheader("Asset Enablement Toggles")
+        if not st.session_state.assets:
+            st.caption("No assets yet. Add them in the Simulation inputs tab.")
+        for asset in st.session_state.assets:
+            info = ASSET_TYPES[asset["type"]]
+            asset["enabled"] = st.toggle(
+                f"{info['icon']} {asset['name']}", value=asset["enabled"], key=f"{asset['id']}_enabled"
+            )
+
+        st.subheader("Configuration")
+        horizon_h = st.number_input("Planning horizon [h]", 6, 48, 24, step=1)
+        interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
+        start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
+        time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
+        relative_mip_gap_percent = st.number_input(
+            "Relative MIP gap [%]",
+            min_value=0.0,
+            max_value=100.0,
+            value=0.0,
+            step=0.1,
+            format="%.3f",
+            help="Stop once the best schedule is within this relative gap of the best bound. Set to 0 to require CBC's optimality proof.",
+        )
+        switching_penalty = st.number_input(
+            "Switching penalty [currency units / mode change]",
+            min_value=0.0,
+            value=0.010,
+            step=0.001,
+            format="%.3f",
+            help="Softly discourages storage mode changes between timesteps. Set to 0 to disable.",
+        )
+        grid_peak_penalty = st.number_input(
+            "Grid peak penalty",
+            min_value=0.0,
+            value=0.1,
+            step=0.1,
+            format="%.2f",
+            help=(
+                "Dimensionless weight. At 0.40 currency/kWh with 15-minute steps, 0.1 means the "
+                "optimizer can accept up to 1 cent higher energy cost for a 1 kW lower grid peak. "
+                "Set to 0 to disable."
+            ),
+        )
 
 # ---------------------------------------------------------------------------
 # Time context
 # ---------------------------------------------------------------------------
-step_h = interval_min / 60
-n_steps = round(horizon_h / step_h)
-_now = datetime.now().astimezone().replace(second=0, microsecond=0)
-start = _now.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
-timestamps = [start + timedelta(hours=i * step_h) for i in range(n_steps)]
-hours_of_day = [(start.hour + start.minute / 60 + i * step_h) % 24 for i in range(n_steps)]
+if simulation_mode:
+    step_h = interval_min / 60
+    n_steps = round(horizon_h / step_h)
+    _now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    start = _now.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
+    timestamps = [start + timedelta(hours=i * step_h) for i in range(n_steps)]
+    hours_of_day = [(start.hour + start.minute / 60 + i * step_h) % 24 for i in range(n_steps)]
 
 
 # ---------------------------------------------------------------------------
@@ -474,43 +483,45 @@ def refresh_latest_result() -> None:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_inputs, tab_opt = st.tabs(["📥 Simulation inputs", "📊 Optimization results"])
-
 entries: list[tuple[dict, dict, object]] = []
-with tab_inputs:
-    st.markdown("**Add new assets**")
-    present = {a["type"] for a in st.session_state.assets}
-    all_options = list(ASSET_TYPES.keys())
-    
-    # Create rows of + buttons for each asset type
-    cols_per_row = 4
-    rows = [all_options[i:i+cols_per_row] for i in range(0, len(all_options), cols_per_row)]
-    for row in rows:
-        cols = st.columns(len(row))
-        for col, asset_type in zip(cols, row):
-            with col:
-                info = ASSET_TYPES[asset_type]
-                # Disable button if this is a single-instance asset and it's already added
-                is_disabled = info["single"] and asset_type in present
-                if st.button(f"+ {info['icon']} {info['label']}", 
-                            key=f"add_{asset_type}", use_container_width=True, disabled=is_disabled):
-                    add_asset(asset_type)
-                    st.rerun()
+if simulation_mode:
+    tab_inputs, tab_opt = st.tabs(["📥 Simulation inputs", "📊 Optimization results"])
+    with tab_inputs:
+        st.markdown("**Add new assets**")
+        present = {a["type"] for a in st.session_state.assets}
+        all_options = list(ASSET_TYPES.keys())
 
-    if not st.session_state.assets:
-        st.info("No assets added yet. Use the + buttons above to start.")
-    color_counts: dict[str, int] = {}
-    color_indices_by_asset_id = {}
-    for asset in st.session_state.assets:
-        if asset["enabled"]:
-            asset_type = asset["type"]
-            color_indices_by_asset_id[asset["id"]] = color_counts.get(asset_type, 0)
-            color_counts[asset_type] = color_indices_by_asset_id[asset["id"]] + 1
+        # Create rows of + buttons for each asset type
+        cols_per_row = 4
+        rows = [all_options[i:i+cols_per_row] for i in range(0, len(all_options), cols_per_row)]
+        for row in rows:
+            cols = st.columns(len(row))
+            for col, asset_type in zip(cols, row):
+                with col:
+                    info = ASSET_TYPES[asset_type]
+                    # Disable button if this is a single-instance asset and it's already added
+                    is_disabled = info["single"] and asset_type in present
+                    if st.button(f"+ {info['icon']} {info['label']}",
+                                key=f"add_{asset_type}", use_container_width=True, disabled=is_disabled):
+                        add_asset(asset_type)
+                        st.rerun()
 
-    for asset in list(st.session_state.assets):
-        if asset["enabled"]:
-            payload, generic = render_asset(asset, color_indices_by_asset_id[asset["id"]])
-            entries.append((asset, payload, generic))
+        if not st.session_state.assets:
+            st.info("No assets added yet. Use the + buttons above to start.")
+        color_counts: dict[str, int] = {}
+        color_indices_by_asset_id = {}
+        for asset in st.session_state.assets:
+            if asset["enabled"]:
+                asset_type = asset["type"]
+                color_indices_by_asset_id[asset["id"]] = color_counts.get(asset_type, 0)
+                color_counts[asset_type] = color_indices_by_asset_id[asset["id"]] + 1
+
+        for asset in list(st.session_state.assets):
+            if asset["enabled"]:
+                payload, generic = render_asset(asset, color_indices_by_asset_id[asset["id"]])
+                entries.append((asset, payload, generic))
+else:
+    tab_opt = st.container()
 
 if run_clicked:
     with st.spinner("Optimizing..."):
@@ -524,7 +535,7 @@ with tab_opt:
 
     result = st.session_state.result
     if result is None:
-        st.info("No result yet. Click 'Run simulation optimization' in the sidebar or run an optimization via external API request.")
+        st.info("No result yet. Run an optimization in Simulation mode or via an external API request.")
     elif "error" in result:
         st.error(result["error"])
     else:
