@@ -275,18 +275,18 @@ def convert_dhw_tank(
 
 
 def convert_building_thermal_mass(data: dict[str, Any], n_steps: int) -> BTM:
-    """Building thermal mass: comfort band to SoC and energy, heating/cooldown rates to discrete powers."""
-    t_default = data["default_weather_compensation_temperature"]
-    span = data["max_comfort_temperature"] - t_default
+    """Building thermal mass: room range to SoC and energy, comfort band to SoC limits, rates to discrete powers."""
+    t_min = data["min_room_temperature"]
+    span = data["max_room_temperature"] - t_min
     thermal_per_degree = data["floor_area"] * data["thermal_mass_coefficient"]  # Wh/°C
 
     return BTM(
         id=data["id"],
         name=data["name"],
-        current_soc=(data["current_indoor_temperature"] - t_default) / span,
+        current_soc=(data["current_indoor_temperature"] - t_min) / span,
         energy_capacity=thermal_per_degree * span,
-        max_soc=1.0,
-        min_soc=0.0,
+        max_soc=(data["max_comfort_temperature"] - t_min) / span,
+        min_soc=(data["min_comfort_temperature"] - t_min) / span,
         charge_efficiency=data["heat_pump_cop_charge"],
         discharge_efficiency=1.0,
         passive_discharge_power=0.0,

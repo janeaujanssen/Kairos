@@ -534,8 +534,10 @@ components:
         - storage_type
         - floor_area
         - thermal_mass_coefficient
-        - default_weather_compensation_temperature
+        - min_room_temperature
+        - max_room_temperature
         - current_indoor_temperature
+        - min_comfort_temperature
         - max_comfort_temperature
         - heating_rate
         - cooldown_rate
@@ -562,14 +564,22 @@ components:
           type: number
           example: 200.0
           description: Thermal mass per unit area [Wh/m²/°C].
-        default_weather_compensation_temperature:
+        min_room_temperature:
           type: number
-          example: 20.0
-          description: Default weather compensation curve target temperature [°C].
+          example: 15.0
+          description: Physical minimum room temperature, maps to SoC 0 [°C].
+        max_room_temperature:
+          type: number
+          example: 23.0
+          description: Physical maximum room temperature, maps to SoC 1 [°C].
         current_indoor_temperature:
           type: number
           example: 20.5
           description: Current indoor temperature [°C].
+        min_comfort_temperature:
+          type: number
+          example: 19.0
+          description: Minimum comfort temperature, lower SoC limit [°C].
         max_comfort_temperature:
           type: number
           example: 21.0
@@ -1021,7 +1031,7 @@ components:
           minimum: 0.0
           maximum: 1.0
           example: 0.0
-          description: Minimum state of charge [-], down to default weather compensation temperature.
+          description: Minimum state of charge [-], down to min comfort temperature.
         charge_efficiency:
           type: number
           example: 2.5

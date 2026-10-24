@@ -277,15 +277,19 @@ dhw_tank = DHW(
 ### Conversion Layer for Building Thermal Mass
 As a simple approach to controlling the Building Thermal Mass using a heat pump, we use a temperature offset on the weather compensation curve. The default curve is for example set to achieve a consistent indoor temperature of 20°C. By adjusting the curve up or down, we can effectively charge or discharge the building's thermal mass. Shifting energy usage from peak to off-peak periods. So the heat pump is controlled by setting it in one of three modes: +dT (charging), -dT (discharging), and 0 (neutral). The heating rate and cooldown rate of the +dT and -dT modes are empirically determined by the user. The thermal mass coefficient doesn't need to be accurately known for this control strategy as it is only used by the optimizer to estimate the amount of energy that can be shifted through preheating. The actual control behavior is determined by the empirically measured heating and cooldown rates.
 
+The SoC maps the room temperature between the min room temperature (SoC 0) and the max room temperature (SoC 1), the same approach as the DHW tank. The min and max comfort temperatures set the SoC limits. Only dropping below the min comfort temperature incurs the soft constraint penalty, so small variations within the comfort band do not force +dT charging.
+
 ```python
 # Physical input parameters:
 
 # Floor area: 100 m²
 # Thermal mass coefficient: 200 Wh/m²/°C
-# Default weather compensation temperature: 20°C
+# Min room temperature: 15°C (SoC 0)
+# Max room temperature: 23°C (SoC 1)
 # Current indoor temperature: 20.5°C
+# Min comfort temperature: 19°C
 # Max comfort temperature: 21°C
-# Heating rate: 0.1 °C/hour (heat pump set +dT w.r.t. default curve)
+# Heating rate: 0.6 °C/hour (heat pump set +dT w.r.t. default curve)
 # Cooldown rate: 0.1 °C/hour (heat pump set -dT w.r.t. default curve)
 # Heat pump COP for +dT mode: 2.5
 # Heat pump COP for default curve mode: 3
@@ -294,10 +298,10 @@ As a simple approach to controlling the Building Thermal Mass using a heat pump,
 building_thermal_mass = BTM(
     # General storage attributes
     name="Building Thermal Mass",
-    current_soc=0.5,                                # (20.5 - 20) / (21 - 20) = 0.5
-    energy_capacity=20000,                          # Thermal energy: 100 m² × 200 Wh/m²/°C × (21 - 20)°C = 20000 Wh
-    max_soc=1,                                      # Up to max comfort temperature
-    min_soc=0,                                      # Down to default weather compensation temperature
+    current_soc=0.69,                               # (20.5 - 15) / (23 - 15) = 0.69
+    energy_capacity=160000,                         # Thermal energy: 100 m² × 200 Wh/m²/°C × (23 - 15)°C = 160000 Wh
+    max_soc=0.75,                                   # Up to max comfort temperature: (21 - 15) / (23 - 15) = 0.75
+    min_soc=0.5,                                    # Down to min comfort temperature: (19 - 15) / (23 - 15) = 0.5
     charge_efficiency=2.5,                          # Heat pump COP for +dT mode
     discharge_efficiency=1,                         # Assuming ideal efficiency for simplicity
     passive_discharge_power=0,                      # Not relevant for building thermal mass
@@ -306,8 +310,8 @@ building_thermal_mass = BTM(
     availability_window=[1, 1, ... 1, 1],           # Always connected and available
 
     # Class specific attributes
-    charge_power=4800,                              # Electric power: 20000 Wh / (21 - 20)°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
-    discharge_power=2000,                           # Thermal power: 20000 Wh / (21 - 20)°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
+    charge_power=4800,                              # Electric power: 20000 Wh/°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
+    discharge_power=2000,                           # Thermal power: 20000 Wh/°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
     default_efficiency=3,                           # Heat pump COP for default curve mode
 )
 ```

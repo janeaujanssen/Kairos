@@ -84,8 +84,10 @@ PHYSICAL_FIELDS = {
     "building_thermal_mass": [
         ("floor_area", "Floor area [m²]", 100.0, "num"),
         ("thermal_mass_coefficient", "Thermal mass coefficient [Wh/m²/°C]", 200.0, "num"),
-        ("default_weather_compensation_temperature", "Default weather compensation temp [°C]", 20.0, "temp"),
+        ("min_room_temperature", "Min room temperature [°C]", 15.0, "temp"),
+        ("max_room_temperature", "Max room temperature [°C]", 23.0, "temp"),
         ("current_indoor_temperature", "Current indoor temperature [°C]", 20.5, "temp"),
+        ("min_comfort_temperature", "Min comfort temperature [°C]", 19.0, "temp"),
         ("max_comfort_temperature", "Max comfort temperature [°C]", 21.0, "temp"),
         ("heating_rate", "Heating rate (+dT) [°C/h]", 0.1, "num_hundredth"),
         ("cooldown_rate", "Cooldown rate (-dT) [°C/h]", 0.1, "num_hundredth"),
