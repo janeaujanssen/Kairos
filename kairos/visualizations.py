@@ -188,11 +188,13 @@ def cost_analysis_chart(
 def soc_chart(
     timestamps, storage_ids: list[str], soc_by_storage: dict[str, list[float]], generics_by_id: dict,
     storage_types_by_id: dict[str, str] | None = None, names_by_id: dict[str, str] | None = None,
+    temperature_ranges_by_id: dict[str, tuple[float, float]] | None = None,
 ) -> go.Figure:
     """Create state of charge trajectories chart for all storage assets per UI architecture."""
     fig = go.Figure()
     storage_types_by_id = storage_types_by_id or {}
     names_by_id = names_by_id or {}
+    temperature_ranges_by_id = temperature_ranges_by_id or {}
     color_indices = _storage_color_indices(storage_ids, storage_types_by_id)
     
     for storage_id in storage_ids:
@@ -204,10 +206,18 @@ def soc_chart(
         asset_type = storage_types_by_id.get(storage_id, "home_battery")
         color = asset_color(asset_type, color_indices[storage_id])
         soc = soc_by_storage[storage_id]
+        kwh = [v * generic.energy_capacity / 1000 for v in soc]
+        if storage_id in temperature_ranges_by_id:
+            t_min, t_max = temperature_ranges_by_id[storage_id]
+            temps = [t_min + v * (t_max - t_min) for v in soc]
+            customdata = list(zip(kwh, temps))
+            hovertemplate = "%{y:.1f} %  (%{customdata[0]:.2f} kWh, %{customdata[1]:.1f} °C)"
+        else:
+            customdata = kwh
+            hovertemplate = "%{y:.1f} %  (%{customdata:.2f} kWh)"
         fig.add_scatter(
             x=timestamps, y=[v * 100 for v in soc], name=names_by_id.get(storage_id, storage_id), line=dict(color=color), line_shape="linear",
-            customdata=[v * generic.energy_capacity / 1000 for v in soc],
-            hovertemplate="%{y:.1f} %  (%{customdata:.2f} kWh)",
+            customdata=customdata, hovertemplate=hovertemplate,
         )
         for bound, label in ((generic.min_soc, "min"), (generic.max_soc, "max")):
             fig.add_hline(y=bound * 100, line_dash="dot", line_color=color,

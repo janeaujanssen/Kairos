@@ -370,6 +370,17 @@ def render_asset(asset: dict, color_index: int = 0) -> tuple[dict, object]:
 # ---------------------------------------------------------------------------
 # Optimization
 # ---------------------------------------------------------------------------
+def temperature_ranges(storage_payloads: list[dict]) -> dict[str, tuple[float, float]]:
+    """Map temperature-based storage IDs to their (min, max) temperature in °C."""
+    ranges = {}
+    for p in storage_payloads:
+        if p.get("storage_type") == "dhw_tank":
+            ranges[p["id"]] = (p["min_water_temperature"], p["max_water_temperature"])
+        elif p.get("storage_type") == "building_thermal_mass":
+            ranges[p["id"]] = (p["min_room_temperature"], p["max_room_temperature"])
+    return ranges
+
+
 def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
     """Call the API with all enabled assets and store the result in session state."""
     by_type = lambda t: [(a, p, g) for a, p, g in entries if a["type"] == t]
@@ -434,6 +445,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         },
         "storage_types_by_id": {a["id"]: a["type"] for a, _, _ in storage},
         "generics": {a["id"]: g for a, _, g in storage},
+        "temperature_ranges_by_id": temperature_ranges([p for _, p, _ in storage]),
     }
 
 
@@ -492,6 +504,7 @@ def refresh_latest_result() -> None:
             asset_id: SimpleNamespace(**metadata)
             for asset_id, metadata in latest["storage_metadata"].items()
         },
+        "temperature_ranges_by_id": temperature_ranges(latest_request.get("storage", [])),
     }
 
 
@@ -618,4 +631,5 @@ with tab_opt:
             viz.show(viz.soc_chart(
                 soc_timestamps, result["storage_ids"], soc, generics, result["storage_types_by_id"],
                 names_by_id=result["names_by_id"],
+                temperature_ranges_by_id=result["temperature_ranges_by_id"],
             ))
