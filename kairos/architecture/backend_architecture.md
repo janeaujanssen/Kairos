@@ -4,8 +4,7 @@
 > **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - Solar curtailment: Solar is a decision variable that allows reducing Solar output when necessary, not to be implemented yet.
-> - Not super happy with Building Thermal Mass implementation:
->   - Building Thermal Mass heat pump: Handle subtracting delta power (only the charging/discharging delta based on mode, not full heat pump consumption) from household consumption in Home Assistant
+
 # Contents
 
 - [Sign Convention](#sign-convention)
@@ -83,7 +82,7 @@ Attributes are defined per source class.
 
 Loads consume energy within the household. There are two types of loads:
 
-1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (e.g. Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pumps, Controllable Loads). For the heat pump, only the power offsets w.r.t. the default weather compensation power need to be excluded. This is not controllable and is fixed at its forecast.
+1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (e.g. Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pump, Controllable Loads). This is not controllable and is fixed at its forecast.
 2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
 
 Typical examples:
@@ -149,7 +148,7 @@ Every storage asset shares a set of general attributes. Attributes that depend o
 |---|---|
 | `Battery` (Home Battery, EV Battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
 | `DHW` (DHW Tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
-| `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, electric power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>Default Efficiency [-] *(heat pump COP in default curve mode)* |
+| `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, thermal power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>COP Forecast [-] *(heat pump COP per time step in default curve mode)*<br>+dT [°C] *(flow temperature offset in +dT mode)*<br>-dT [°C] *(flow temperature offset in -dT mode)*<br>COP Flow Sensitivity *(Change of COP per flow temperature increase)* [-/°C] |
 
 ## Storage Classes
 
@@ -289,32 +288,50 @@ The SoC maps the room temperature between the min room temperature (SoC 0) and t
 # Current indoor temperature: 20.5°C
 # Min comfort temperature: 19°C
 # Max comfort temperature: 21°C
-# Heating rate: 0.6 °C/hour (heat pump set +dT w.r.t. default curve)
-# Cooldown rate: 0.1 °C/hour (heat pump set -dT w.r.t. default curve)
-# Heat pump COP for +dT mode: 2.5
-# Heat pump COP for default curve mode: 3
+#
+# Heating rate: +0.2 °C/hour (heat pump set +dT w.r.t. default curve)
+# +dT flow temperature offset: +5 °C
+# Cooldown rate: -0.1 °C/hour (heat pump set -dT w.r.t. default curve)
+# -dT flow temperature offset: -5 °C
+#
+# Heat loss coefficient: 367 W/°C
+#
+# COP model:
+# Reference COP: 3
+# Reference outdoor temperature: 7 °C
+# COP outdoor temperature coefficient: 0.1 COP/°C
+# COP flow temperature sensitivity: 2 %/°C
+
 
 # Resulting storage object:
 building_thermal_mass = BTM(
     # General storage attributes
     name="Building Thermal Mass",
     current_soc=0.69,                               # (20.5 - 15) / (23 - 15) = 0.69
-    energy_capacity=160000,                         # Thermal energy: 100 m² × 200 Wh/m²/°C × (23 - 15)°C = 160000 Wh
-    max_soc=0.75,                                   # Up to max comfort temperature: (21 - 15) / (23 - 15) = 0.75
-    min_soc=0.5,                                    # Down to min comfort temperature: (19 - 15) / (23 - 15) = 0.5
-    charge_efficiency=2.5,                          # Heat pump COP for +dT mode
-    discharge_efficiency=1,                         # Assuming ideal efficiency for simplicity
-    passive_discharge_power=0,                      # Not relevant for building thermal mass
+    energy_capacity=160000,                         # 100 m² × 200 Wh/m²/°C × (23 - 15)°C = 160000 Wh
+    max_soc=0.75,                                   # (21 - 15) / (23 - 15) = 0.75
+    min_soc=0.5,                                    # (19 - 15) / (23 - 15) = 0.5
+    charge_efficiency=0,                            # For building thermal mass, COP model is used
+    discharge_efficiency=1,                         # Thermal efficiency, assuming ideal efficiency for simplicity
+    passive_discharge_power=[1000, 1500, ... 1200, 800], # W, heat loss per time step using 367 W/°C * (assumed indoor temperature - outdoor temperature forecast)
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # Not relevant for building thermal mass
     availability_window=[1, 1, ... 1, 1],           # Always connected and available
 
     # Class specific attributes
-    charge_power=4800,                              # Electric power: 20000 Wh/°C * 0.6 °C/hour / 2.5 = 4800 W, this is not a max power value but a discretely defined power
+    charge_power=4000,                              # Thermal power: 20000 Wh/°C * 0.2 °C/hour = 4000 W, this is not a max power value but a discretely defined power
     discharge_power=2000,                           # Thermal power: 20000 Wh/°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
-    default_efficiency=3,                           # Heat pump COP for default curve mode
+    cop_forecast=[3, 2.5, ... 3.2, 2.9],            # Forecasted COP values for each time step (in default curve mode), COP = COP_reference + COP_outdoor_coefficient * (outdoor_temperature_forecast - cop_reference_outdoor_temperature)
+    plus_dt=5,                                      # °C flow-temperature offset
+    minus_dt=-5,                                    # °C flow-temperature offset
+    cop_flow_sensitivity=0.02,                      # Fraction/°C, e.g. 0.02 = 2%/°C
 )
 ```
+
+The +dT and -dT COPs are derived from the default curve COP, with the flow temperature offset $\Delta T$ of the mode (`plus_dt` or `minus_dt`):
+
+$$\text{COP}_{\mathrm{mode},t} = \text{COP}_{\mathrm{default},t} \times (1 - \text{cop\_flow\_sensitivity} \times \Delta T_{\mathrm{mode}})$$
+
 # Optimizer
 ## High Level Process
 
@@ -333,30 +350,6 @@ The optimizer basically optimizes for a minimum or maximum of a certain objectiv
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
 
-### Building Thermal Mass Discharge Benefit
-But because of our way of implementing the Building Thermal Mass this objective function is not yet complete.
-
-- When the Building Thermal Mass is charged, extra energy is used, and this is represented in the objective function with: Grid Import Energy x Import Price
-- When the Building Thermal Mass is discharged, it allows the building to cool down, which does not directly translate into economic benefits in the objective function as there is no electrical energy exported. The economic benefit comes from avoiding the normally required Grid Import Energy at that time.
-
-So by pre-charging the Building Thermal Mass when electricity prices are low, the optimizer can reduce grid import costs during periods of high electricity prices, during discharge of the thermal mass.
-This is in contrast with the DHW Tank, where the energy demand forecast dictates how much the storage should be charged, the economic benefit is then defined in the objective function by minimizing Grid Import Energy x Import Price.
-
-To capture this benefit in the objective function, an additional term is introduced: Building Thermal Discharge Benefit (note that this term only applies to Building Thermal Mass).
-
-$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t})$$
-
-With the building thermal discharge benefit being:
-
-$$\text{Building Thermal Discharge Benefit}_{t} = \text{Building Discharged Thermal Energy}_{t} \times \frac{\eta_{\mathrm{discharge}}}{\eta_{\mathrm{default}}} \times \text{Import Price}_{t}$$
-
-where:
-
-- $\eta_{\mathrm{discharge}}$ is the building thermal storage discharging efficiency (`discharge_efficiency`), thermal to thermal conversion, which is 1.
-- $\eta_{\mathrm{default}}$ is the heat pump COP during operation in default weather compensation curve mode (`default_efficiency` of the `BTM` class), electrical to thermal conversion.
-
-This term represents the avoided electricity cost obtained by using previously stored thermal energy instead of producing the same heat at the current electricity price.
-
 ### End-of-Horizon Value
 
 Because the optimization horizon is finite, energy remaining in storage at the end of the horizon may still have value beyond the optimization period.
@@ -364,7 +357,7 @@ Because the optimization horizon is finite, energy remaining in storage at the e
 To prevent the optimizer from unnecessarily depleting storage assets near the end of the horizon, a terminal value can be assigned to the remaining stored energy. This rewards schedules that retain useful energy for future operation outside the optimization horizon.
 
 The objective function will then be:
-$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t} - \text{Building Thermal Discharge Benefit}_{t}) - \text{Remaining Storage Value}_{T}$$
+$$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t}) - \text{Remaining Storage Value}_{T}$$
 
 With the remaining storage value being:
 
@@ -378,7 +371,7 @@ With
 | Storage type | $\eta_{\mathrm{value}}$ | Reasoning |
 |---|---|---|
 | Thermal, DHW Tank | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{charge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Producing that same amount of useful energy directly would require that amount $/\ \eta_{\mathrm{charge}}$ of electric energy, where $\eta_{\mathrm{charge}}$ is the COP (`charge_efficiency` of the `DHW` class). |
-| Thermal, Building Thermal Mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW Tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `default_efficiency` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
+| Thermal, Building Thermal Mass | $\eta_{\mathrm{discharge}} / \eta_{\mathrm{default}}$ | Same reasoning as the DHW Tank, but the COP that applies is the one of the default weather compensation curve ($\eta_{\mathrm{default}}$: `cop_forecast` of the `BTM` class), as that is the mode in which the heat would otherwise be produced. |
 | Electrical (Home Battery, EV Battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
 ---
 ### Storage Mode Switching Penalty
@@ -437,7 +430,7 @@ Note: The Base Load is defined as the residual of total household consumption af
 
 $${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\text{discharge}}$$
 
-For thermal storage (DHW Tank, Building Thermal Mass), discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance.
+For DHW Tank, discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance. For Building Thermal Mass, $P_{\text{charge}}$ is the electrical power of the heat pump, its discharge is thermal and does not enter the balance.
 
 ### Asset Constraints
 
@@ -463,7 +456,7 @@ where:
 - $P_{\mathrm{charge}}$ represents charging power [W].
 - $P_{\mathrm{discharge}}$ represents discharge power [W] which is controlled by the optimization algorithm.
 - $E_{\mathrm{demand}}$ represents the forecasted useful energy demand [Wh] per time step that must be supplied by the storage.
-- $\eta_{\mathrm{charge}}$ represents the charging efficiency [-].
+- $\eta_{\mathrm{charge}}$ represents the charging efficiency [-]. For BTM the SoC term is the thermal shift $Q_{\text{charge,BTM}}$ with $\eta_{\mathrm{charge}} = 1$, see below.
 - $\eta_{\mathrm{discharge}}$ represents the discharging efficiency [-].
 - $P_{\mathrm{loss}}$ represents passive storage losses [W].
 - $C$ represents the storage capacity [Wh].
@@ -493,9 +486,9 @@ where $P_{\text{charge}}^{\max}$ and $P_{\text{discharge}}^{\max}$ are `max_char
 
 For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode). With binary $c_{\text{BTM},t}$ for +dT mode and binary $d_{\text{BTM},t}$ for -dT mode:
 
-$$P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
+$$P_{\text{charge,BTM},t} = \frac{P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
 
-where $P_{\text{charge,BTM}}$ and $P_{\text{discharge,BTM}}$ are `charge_power` and `discharge_power`; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
+where $P_{\text{charge,BTM}}$ is the thermal `charge_power`, $P_{\text{discharge,BTM}}$ is the thermal `discharge_power`, and $\mathrm{COP}_{+dT,t}$ converts the thermal charge power to electrical input for each time step; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
 **Exceptions**:
 - Energy demand forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
@@ -512,7 +505,7 @@ $$c_{\text{DHW},t} + c_{\text{BTM},t} \leq 1$$
 
 with the discrete charging power defined by:
 
-$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = P_{\text{charge,BTM}} \cdot c_{\text{BTM},t}$$
+$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = \frac{P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}$$
 
 where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes.
 
@@ -537,9 +530,9 @@ The solver status indicating whether CBC met its configured stopping criteria:
 `relative_mip_gap` is a fraction (default `0`). A value of `0` requires CBC's optimality proof. The response also includes the configured gap and may include `termination_reason`, a recognized CBC explanation such as `Time limit reached`, `Relative MIP gap target reached`, or `Optimality proven`.
 
 ### Objective Cost
-The value of the full objective optimized by CBC [price units]. It includes the grid energy cost, less the BTM discharge benefit and remaining storage value, plus SoC violation penalties, storage-mode switching penalties, and the grid peak tie-breaker. This value can differ from the grid energy cost shown separately in the UI:
+The value of the full objective optimized by CBC [price units]. It includes the grid energy cost, less the remaining storage value, plus SoC violation penalties, storage-mode switching penalties, and the grid peak tie-breaker. This value can differ from the grid energy cost shown separately in the UI:
 
-$$\text{Objective Cost} = \text{Grid Energy Cost} - \text{BTM Discharge Benefit} - \text{Remaining Storage Value} + \text{SoC Violation Penalties} + \text{Switching Penalties} + \text{Grid Peak Tie-Breaker}$$
+$$\text{Objective Cost} = \text{Grid Energy Cost} - \text{Remaining Storage Value} + \text{SoC Violation Penalties} + \text{Switching Penalties} + \text{Grid Peak Tie-Breaker}$$
 
 ### Asset Schedules
 
