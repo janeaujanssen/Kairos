@@ -1,4 +1,4 @@
-"""Pure AI: Streamlit UI for Kairos, calling the optimization API (see ui_architecture.md)."""
+"""Pure AI: Streamlit UI for Kairos, calling the optimization API (see ui_architecture.md). Run using `streamlit run app.py`."""
 
 from __future__ import annotations
 
@@ -217,12 +217,12 @@ with st.sidebar:
         interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
         start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
         time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
-        relative_mip_gap_percent = st.number_input(
-            "Relative MIP gap [%]",
+        relative_mip_gap = st.number_input(
+            "Relative MIP gap [-]",
             min_value=0.0,
-            max_value=100.0,
+            max_value=1.0,
             value=0.0,
-            step=0.1,
+            step=0.001,
             format="%.3f",
             help="Stop once the best schedule is within this relative gap of the best bound. Set to 0 to require CBC's optimality proof.",
         )
@@ -398,7 +398,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "time_step_duration_hours": step_h,
         "horizon_hours": horizon_h,
         "time_limit_s": time_limit_s,
-        "relative_mip_gap": relative_mip_gap_percent / 100,
+        "relative_mip_gap": relative_mip_gap,
         "switching_penalty": switching_penalty,
         "grid_peak_penalty": grid_peak_penalty,
         "grid": grid[0][1],

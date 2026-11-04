@@ -1,4 +1,4 @@
-"""Pure AI: HTTP API for Kairos, implementing openapi.yaml."""
+"""Pure AI: HTTP API for Kairos, implementing openapi.yaml. Run using `uvicorn api:app`."""
 
 from __future__ import annotations
 

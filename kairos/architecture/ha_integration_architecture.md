@@ -55,7 +55,7 @@ The App image also contains a Streamlit **dashboard** with two parts: the **resu
 
 ```mermaid
 flowchart TB
-    A["HA Entities: Device States & Forecasts"]
+    A["HA inputs: Device States, Entity History & Forecasts"]
 
     subgraph INT["kairos-ha-integration"]
         B["Entity Selection & Parameter Configuration"]

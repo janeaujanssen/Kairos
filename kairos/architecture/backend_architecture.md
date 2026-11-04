@@ -6,7 +6,6 @@
 > - Solar curtailment: Solar is a decision variable that allows reducing Solar output when necessary, not to be implemented yet.
 
 # Contents
-
 - [Sign Convention](#sign-convention)
 - [Energy Devices Abstraction](#energy-devices-abstraction)
   - [Overview](#overview)
@@ -22,7 +21,6 @@
 
 
 # Sign Convention
-
 All power flows follow a **consistent sign convention** to eliminate ambiguity in the energy balance:
 
 | Asset Class | Positive Direction | Negative Direction | Example |
@@ -37,7 +35,6 @@ $$\sum \text{Source Power} = \sum \text{Load Power} + \sum \text{Storage Power}$
 
 # Energy Devices Abstraction
 ## Overview
-
 A typical residential energy system contains a mix of devices that produce, consume, and store energy.
 
 To allow Kairos to work independently of specific hardware, all physical devices are mapped onto three generic asset classes:
@@ -59,7 +56,6 @@ This abstraction allows the optimizer to reason about energy flows without requi
 Each asset class has attributes that either describe its current state, act as a constraint or contain forecasts.
 
 ## Sources
-
 Sources provide energy to the household energy system.
 
 Typical examples:
@@ -68,18 +64,15 @@ Typical examples:
 - Solar system
 
 ### Attributes
-
 Attributes are defined per source class.
 
 #### Class specific attributes
-
 | Source class | Class specific attributes |
 |---|---|
 | `Grid` | Max Import Power [W]<br>Max Export Power [W]<br>Import Price Forecast [price/Wh per time step]<br>Export Price Forecast [price/Wh per time step] |
 | `PV` | Power Forecast [W per time step] |
 
 ## Loads
-
 Loads consume energy within the household. There are two types of loads:
 
 1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (e.g. Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pump, Controllable Loads). This is not controllable and is fixed at its forecast.
@@ -91,11 +84,9 @@ Typical examples:
 - Controllable Loads (e.g., washing machine, dishwasher, pool pump)
 
 ### Attributes
-
 Every load shares a set of general attributes. Attributes that depend on the load type are defined per load class.
 
 #### General attributes
-
 ##### State
 - None
 
@@ -103,14 +94,12 @@ Every load shares a set of general attributes. Attributes that depend on the loa
 - Controllable [-] *(yes/no, fixed per class: no for `BaseLoad`, yes for `ControllableLoad`)*
 
 #### Class specific attributes
-
 | Load class | Class specific attributes |
 |---|---|
 | `BaseLoad` (household demand) | Power Forecast [W per time step] |
 | `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional]<br>Earliest Start Time [time of day]<br>Latest Finish Time [time of day] |
 
 ## Storage
-
 Storage assets shift energy through time.
 
 Typical examples:
@@ -121,11 +110,9 @@ Typical examples:
 - Building Thermal Mass
 
 ### Attributes
-
 Every storage asset shares a set of general attributes. Attributes that depend on the storage type are defined per storage class (see [Storage Classes](#storage-classes)).
 
 #### General attributes
-
 ##### State
 - Current State of Charge [-] (SoC)
 
@@ -143,7 +130,6 @@ Every storage asset shares a set of general attributes. Attributes that depend o
 - Availability Window [-] *(1/0 for available/unavailable, typically EV)*
 
 #### Class specific attributes
-
 | Storage class | Class specific attributes |
 |---|---|
 | `Battery` (Home Battery, EV Battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
@@ -151,7 +137,6 @@ Every storage asset shares a set of general attributes. Attributes that depend o
 | `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, thermal power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>COP Forecast [-] *(heat pump COP per time step in default curve mode)*<br>+dT [°C] *(flow temperature offset in +dT mode)*<br>-dT [°C] *(flow temperature offset in -dT mode)*<br>COP Flow Sensitivity *(Change of COP per flow temperature increase)* [-/°C] |
 
 ## Storage Classes
-
 The storage classes provide a representation for all types of storage assets, allowing the optimizer to handle them in a consistent manner regardless of their physical implementation.
 All classes share the general storage attributes. Each class adds the attributes that are specific to its physical behaviour.
 The attributes might make sense for a normal battery, but less for thermal storage like DHW Tanks or Building Thermal Mass. Therefore, a conversion layer is required to map the physical input characteristics of each storage type to the class attributes.
@@ -295,12 +280,13 @@ The SoC maps the room temperature between the min room temperature (SoC 0) and t
 # -dT flow temperature offset: -5 °C
 #
 # Heat loss coefficient: 367 W/°C
+# Outdoor temperature forecast: one value per time step (°C)
 #
 # COP model:
 # Reference COP: 3
 # Reference outdoor temperature: 7 °C
 # COP outdoor temperature coefficient: 0.1 COP/°C
-# COP flow temperature sensitivity: 2 %/°C
+# COP flow temperature sensitivity: -0.02 -/°C
 
 
 # Resulting storage object:
@@ -324,7 +310,7 @@ building_thermal_mass = BTM(
     cop_forecast=[3, 2.5, ... 3.2, 2.9],            # Forecasted COP values for each time step (in default curve mode), COP = COP_reference + COP_outdoor_coefficient * (outdoor_temperature_forecast - cop_reference_outdoor_temperature)
     plus_dt=5,                                      # °C flow-temperature offset
     minus_dt=-5,                                    # °C flow-temperature offset
-    cop_flow_sensitivity=0.02,                      # Fraction/°C, e.g. 0.02 = 2%/°C
+    cop_flow_sensitivity=-0.02,                      # Fraction/°C, e.g. -0.02 = -2%/°C
 )
 ```
 
@@ -334,7 +320,6 @@ $$\text{COP}_{\mathrm{mode},t} = \text{COP}_{\mathrm{default},t} \times (1 - \te
 
 # Optimizer
 ## High Level Process
-
 The optimizer determines the optimal operating strategy for all controllable assets over a planning horizon. It takes as input the current states, constraints and forecasts of all assets. For each time step, the optimizer then determines:
 - The optimal power setpoints for each controllable asset (e.g., Home Battery, EV Battery, DHW Tank, Building Thermal Mass, Controllable Loads)
 
@@ -345,13 +330,11 @@ The optimizer solves the optimization problem using a Mixed Integer Linear Progr
 The power setpoints at t=0 can then be immediately applied to the assets, making sure that the physical devices follow the setpoints accurately. For continuous operation, this process is repeated at regular intervals to adapt to changing conditions and updated forecasts. This is known as a receding horizon or model predictive control approach. To give the actual commands to the assets, the optimizer's output must be translated into device-specific control signals. This is done through a control interface, e.g. Home Assistant.
 
 ## Optimization Objective
-
 The optimizer basically optimizes for a minimum or maximum of a certain objective function. In our case this is a minimization of the total energy cost over the planning horizon. Typically the following objective function is used:
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
 
 ### End-of-Horizon Value
-
 Because the optimization horizon is finite, energy remaining in storage at the end of the horizon may still have value beyond the optimization period.
 
 To prevent the optimizer from unnecessarily depleting storage assets near the end of the horizon, a terminal value can be assigned to the remaining stored energy. This rewards schedules that retain useful energy for future operation outside the optimization horizon.
@@ -375,7 +358,6 @@ With
 | Electrical (Home Battery, EV Battery) | $\eta_{\mathrm{discharge}}$ | Useful energy is equivalent to the stored energy $\times\ \eta_{\mathrm{discharge}}$. Obtaining that same amount of useful energy directly would require importing exactly that amount from the grid (1:1), so $\eta_{\mathrm{charge}}$ does not appear. |
 ---
 ### Storage Mode Switching Penalty
-
 To favor longer continuous operating runs, the optimizer uses binary mode variables $c_t$ and $d_t$ for each storage device at each timestep $t$, representing charge and discharge modes respectively. 
 
 $$c_t, d_t \in \{0, 1\}$$
@@ -400,7 +382,6 @@ The parameter $\text{Switching Penalty}$ is the cost-equivalent penalty per mode
 When BTM shares a heat pump with DHW (see [Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass](#mutual-exclusivity-of-charging-the-dhw-tank-and-building-thermal-mass)), the shared resource constraint forces unavoidable alternation between DHW and BTM charging; the switching penalty then discourages unnecessary additional switches within a charging or idle phase.
 
 ### Secondary Objectives
-
 In some situations, multiple schedules result in the same total energy cost. For example, when electricity prices are identical over several timesteps, charging a battery now or later may lead to exactly the same objective value.
 
 To avoid arbitrary solutions, the optimizer applies secondary objectives as tie-breakers. Examples include:
@@ -413,11 +394,9 @@ These objectives are assigned a much smaller weight than the main cost objective
 The grid peak tie-breaker is computed as `grid_peak_penalty * average_import_price * time_step_duration * grid_peak`. Since the energy-cost term also multiplies power by price per Wh and timestep hours, `grid_peak_penalty` is dimensionless. A value of zero disables this tie-breaker.
 
 ## Optimizer Constraints
-
 The objective function must be optimized while satisfying all constraints.
 
 ### Energy Balance Constraint
-
 The most important system-level constraint is the energy balance constraint. This constraint ensures that energy is conserved at every timestep and that total power supply always equals total power demand.
 
 In mathematical terms:
@@ -433,7 +412,6 @@ $${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\
 For DHW Tank, discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance. For Building Thermal Mass, $P_{\text{charge}}$ is the electrical power of the heat pump, its discharge is thermal and does not enter the balance.
 
 ### Asset Constraints
-
 In addition to the system-level energy balance constraint, each asset contributes its own physical and operational constraints.
 
 Examples include:
@@ -465,13 +443,11 @@ where:
 This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
 
 ### Controllable Load Run Continuity
-
 A controllable load without `run_started_at` is scheduled as one uninterrupted run within its operating window. When `run_started_at` is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again on the day the run started. If the run started on an earlier day, the load is scheduled normally within its operating window.
 
 `run_started_at` must be a timezone-aware timestamp no later than the optimization timestamp. It holds the load's latest start time, so the caller does not need to clear it after the run completes.
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
-
 Storage assets cannot simultaneously charge and discharge, enforced via the binary variables $c_t, d_t \in \{0, 1\}$ (defined in [Storage Mode Switching Penalty](#storage-mode-switching-penalty)) for charging and discharging respectively, with $c_t + d_t \leq 1$. When both are 0 the storage is idle.
 
 For any modeled charge or discharge mode, the active power must meet the universal minimum, this helps mapping the binary variables correctly:
@@ -496,7 +472,6 @@ where $P_{\text{charge,BTM}}$ is the thermal `charge_power`, $P_{\text{discharge
 - Passive discharge (losses): Passive discharge is always allowed simultaneously with charging or discharging.
 
 ### Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass
-
 DHW tank and building thermal mass typically share a single heat pump and cannot both charge simultaneously. This shared resource constraint creates unavoidable mode switches: the optimizer must alternate between charging DHW and precharging BTM based on cost and demand forecasts. The [Storage Mode Switching Penalty](#storage-mode-switching-penalty) can then be tuned to smooth these forced transitions, discouraging unnecessary additional switches within a charging or idle phase.
 
 Binary variables $c_{\text{DHW},t}$ and $c_{\text{BTM},t}$ (the charge binaries from their respective Mutual Exclusivity of Charge and Discharge constraints) enforce:
@@ -512,13 +487,11 @@ where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power`
 This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW and building thermal mass make sure that additional priority is given to the one that has SoC below minimum. When both DHW and building thermal mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
 
 ### Soft Constraints
-
 Some constraints, like minimum and maximum state-of-charge limits, are implemented as soft constraints. Rather than making the optimization problem infeasible, violations are allowed but receive a large penalty cost in the objective function.
 
 This ensures the optimizer always returns the best achievable solution while strongly discouraging constraint violations.
 
 ## Optimizer Output
-
 The optimizer returns the optimization result containing the following information:
 
 ### Status
@@ -535,7 +508,6 @@ The value of the full objective optimized by CBC [price units]. It includes the 
 $$\text{Objective Cost} = \text{Grid Energy Cost} - \text{Remaining Storage Value} + \text{SoC Violation Penalties} + \text{Switching Penalties} + \text{Grid Peak Tie-Breaker}$$
 
 ### Asset Schedules
-
 The optimizer returns a dictionary of assets keyed by asset ID. Each asset contains:
 
 - `setpoint`: The power setpoint for the first time step [W]. This is the value that can be applied immediately and exposed as the Home Assistant entity state.
