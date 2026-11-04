@@ -1,7 +1,7 @@
 # Home Assistant Integration Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** final. This document builds on `backend_architecture.md` (sign convention, asset classes, conversion layer, optimizer) and `kairos/openapi.yaml` (API contract). It describes how Kairos connects to Home Assistant (HA); it does not repeat the optimizer design.
+> **Status:** final. This document builds on `optimizer_architecture.md` (sign convention, asset classes, conversion layer, optimizer) and `kairos/openapi.yaml` (API contract). It describes how Kairos connects to Home Assistant (HA); it does not repeat the optimizer design.
 
 # Contents
 
@@ -294,7 +294,7 @@ The integration builds one `POST /optimize` request from the snapshot. Shown bel
 
 ## Optimization
 
-This step runs entirely in the App. The integration only waits for the response, and the details of the solver are in `backend_architecture.md`.
+This step runs entirely in the App. The integration only waits for the response, and the details of the solver are in `optimizer_architecture.md`.
 
 1. **Validate** the request. Invalid payloads return `400`.
 2. **Parse forecasts**: align raw forecast data to the time grid that starts at `timestamp` (floored to the time-step boundary) and spans `horizon_hours`. Entities without a forecast are held constant at the current value.

@@ -1,7 +1,7 @@
-# Backend Architecture for Kairos
+# Optimizer Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** Final. This document describes the backend architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
+> **Status:** Final. This document describes the optimizer architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
 > **To Do:**
 > - Solar curtailment: Solar is a decision variable that allows reducing Solar output when necessary, not to be implemented yet.
 
@@ -66,38 +66,38 @@ Typical examples:
 ### Attributes
 Attributes are defined per source class.
 
-#### Class specific attributes
-| Source class | Class specific attributes |
+#### Class Specific Attributes
+| Source Class | Class Specific Attributes |
 |---|---|
-| `Grid` | Max Import Power [W]<br>Max Export Power [W]<br>Import Price Forecast [price/Wh per time step]<br>Export Price Forecast [price/Wh per time step] |
-| `PV` | Power Forecast [W per time step] |
+| `Grid` | Max Grid Import Power [W]<br>Max Grid Export Power [W]<br>Grid Import Price Forecast [price/Wh per time step]<br>Grid Export Price Forecast [price/Wh per time step] |
+| `Solar` | Power Forecast [W per time step] |
 
 ## Loads
 Loads consume energy within the household. There are two types of loads:
 
 1. **Base Load**: The household's electrical power draw excluding every device modelled in Kairos (e.g. Home Battery and EV Battery charging, DHW Tank and Building Thermal Mass heat pump, Controllable Loads). This is not controllable and is fixed at its forecast.
-2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., washing machine, dishwasher, pool pump).
+2. **Controllable Loads**: Appliances that can be scheduled within operating windows (e.g., Washing Machine, Dishwasher, Pool Pump).
 
 Typical examples:
 
 - Base Load (residual household demand)
-- Controllable Loads (e.g., washing machine, dishwasher, pool pump)
+- Controllable Loads (e.g., Washing Machine, Dishwasher, Pool Pump)
 
 ### Attributes
 Every load shares a set of general attributes. Attributes that depend on the load type are defined per load class.
 
-#### General attributes
+#### General Attributes
 ##### State
 - None
 
 ##### Constraints
 - Controllable [-] *(yes/no, fixed per class: no for `BaseLoad`, yes for `ControllableLoad`)*
 
-#### Class specific attributes
-| Load class | Class specific attributes |
+#### Class Specific Attributes
+| Load Class | Class Specific Attributes |
 |---|---|
 | `BaseLoad` (household demand) | Power Forecast [W per time step] |
-| `ControllableLoad` (washing machine, dishwasher, pool pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Started At [timestamp, optional]<br>Earliest Start Time [time of day]<br>Latest Finish Time [time of day] |
+| `ControllableLoad` (Washing Machine, Dishwasher, Pool Pump) | Average Power [W]<br>Energy Demand [Wh]<br>Run Start Time [timestamp, optional]<br>Earliest Start Time [timestamp]<br>Latest Finish Time [timestamp] |
 
 ## Storage
 Storage assets shift energy through time.
@@ -112,29 +112,29 @@ Typical examples:
 ### Attributes
 Every storage asset shares a set of general attributes. Attributes that depend on the storage type are defined per storage class (see [Storage Classes](#storage-classes)).
 
-#### General attributes
+#### General Attributes
 ##### State
-- Current State of Charge [-] (SoC)
+- Current State of Charge [0-1]
 
 ##### Constraints
 - Energy Capacity [Wh]
-- Max SoC [-]
-- Min SoC [-]
-- Charge Efficiency [-]
-- Discharge Efficiency [-]
-- Passive Discharge Power [W] *(typically DHW storage)*
+- Max SoC [0-1]
+- Min SoC [0-1]
+- Charge Efficiency [0-1]
+- Discharge Efficiency [0-1]
+- Passive Discharge Power [W] *(typically DHW Tank)*
 - Discharge to Electrical Network [-] *(yes/no, yes for electrical storage, no for thermal storage)*
 
 ##### Forecasts (value per time step)
 - Energy Demand Forecast [Wh] *(typically EV Battery or DHW Tank)*
-- Availability Window [-] *(1/0 for available/unavailable, typically EV)*
+- Availability Window [1/0] *(1/0 for available/unavailable, typically EV Battery)*
 
-#### Class specific attributes
-| Storage class | Class specific attributes |
+#### Class Specific Attributes
+| Storage Class | Class Specific Attributes |
 |---|---|
 | `Battery` (Home Battery, EV Battery) | Max Charge Power [W]<br>Max Discharge Power [W] |
 | `DHW` (DHW Tank) | Charge Power [W] *(discrete, electric power of the heat pump)* |
-| `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, thermal power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>COP Forecast [-] *(heat pump COP per time step in default curve mode)*<br>+dT [°C] *(flow temperature offset in +dT mode)*<br>-dT [°C] *(flow temperature offset in -dT mode)*<br>COP Flow Sensitivity *(Change of COP per flow temperature increase)* [-/°C] |
+| `BTM` (Building Thermal Mass) | Charge Power [W] *(discrete, thermal power in +dT mode)*<br>Discharge Power [W] *(discrete, thermal power in -dT mode)*<br>COP Forecast [-] *(heat pump COP per time step in default curve mode)*<br>+dT Flow Temperature Offset [°C] *(flow temperature offset in +dT mode)*<br>-dT Flow Temperature Offset [°C] *(flow temperature offset in -dT mode)*<br>COP Flow Temperature Sensitivity [-/°C] *(change of COP per flow temperature increase)* |
 
 ## Storage Classes
 The storage classes provide a representation for all types of storage assets, allowing the optimizer to handle them in a consistent manner regardless of their physical implementation.
@@ -147,15 +147,15 @@ For a normal Home Battery, the conversion layer is straightforward as the physic
 ```python
 # Physical input parameters:
 
-# Current SoC: 50%
-# Energy capacity: 10000 Wh
+# Current State of Charge: 50%
+# Energy Capacity: 10000 Wh
 # Min SoC: 10%
 # Max SoC: 90%
-# Max charge power: 5000 W
-# Max discharge power: 5000 W
-# Charge efficiency: 0.95
-# Discharge efficiency: 0.95
-# Passive discharge power: 0 W (no passive discharge for the battery)
+# Max Charge Power: 5000 W
+# Max Discharge Power: 5000 W
+# Charge Efficiency: 0.95
+# Discharge Efficiency: 0.95
+# Passive Discharge Power: 0 W (no passive discharge for the battery)
 
 # Resulting storage object:
 home_battery = Battery(
@@ -163,8 +163,8 @@ home_battery = Battery(
     name="Home Battery",
     current_soc=0.5,                                # 50%
     energy_capacity=10000,                          # 10000 Wh
-    max_soc=0.9,                                    # Health protection: 90% maximum
-    min_soc=0.1,                                    # Health protection: 10% minimum
+    max_soc=0.9,                                    # Health protection: 90% max
+    min_soc=0.1,                                    # Health protection: 10% min
     charge_efficiency=0.95,                         # One-way efficiency
     discharge_efficiency=0.95,                      # One-way efficiency
     passive_discharge_power=0,                      # No passive discharge for battery
@@ -184,19 +184,19 @@ For an EV Battery, the conversion layer maps the physical parameters of the EV B
 ```python
 # Physical input parameters:
 
-# Current SoC: 50%
-# Energy capacity: 60000 Wh
+# Current State of Charge: 50%
+# Energy Capacity: 60000 Wh
 # Min SoC: 10%
 # Max SoC: 90%
-# Max charge power: 7400 W
-# Max discharge power: 0 W
-# Charge efficiency: 0.95
-# Discharge efficiency: 0.95
-# Passive discharge power: 0 W (no passive discharge for the battery)
-# Vehicle efficiency: 0.005 km/wh
-# Round trip distance: 100 km
-# Expected departure time: 09:00 h
-# Expected arrival time: 18:00 h
+# Max Charge Power: 7400 W
+# Max Discharge Power: 0 W
+# Charge Efficiency: 0.95
+# Discharge Efficiency: 0.95
+# Passive Discharge Power: 0 W (no passive discharge for the battery)
+# Vehicle Efficiency: 0.005 km/wh
+# Round-Trip Distance: 100 km
+# Expected Departure Time: 09:00 h
+# Expected Arrival Time: 18:00 h
 
 # Resulting storage object:
 ev_battery = Battery(
@@ -204,8 +204,8 @@ ev_battery = Battery(
     name="EV Battery",
     current_soc=0.5,                                # 50%
     energy_capacity=60000,                          # 60000 Wh
-    max_soc=0.9,                                    # Health protection: 90% maximum
-    min_soc=0.1,                                    # Health protection: 10% minimum
+    max_soc=0.9,                                    # Health protection: 90% max
+    min_soc=0.1,                                    # Health protection: 10% min
     charge_efficiency=0.95,                         # One-way efficiency
     discharge_efficiency=0.95,                      # One-way efficiency
     passive_discharge_power=0,                      # No passive discharge for battery
@@ -220,23 +220,23 @@ ev_battery = Battery(
 ```
 
 ### Conversion Layer for DHW Tank
-The optimal charging of the DHW tank is driven by the energy demand forecast. This can be a proper forecast but a simple typical estimate like a morning and evening energy demand can be sufficient for most cases.
+The optimal charging of the DHW Tank is driven by the energy demand forecast. This can be a proper forecast but a simple typical estimate like a morning and evening energy demand can be sufficient for most cases.
 
 ```python
 # Physical input parameters:
 
-# Tank volume: 300 liters
-# Min water temperature: 20°C
-# Max water temperature: 60°C
-# Current water temperature: 50°C
-# Min comfort temperature: 40°C
-# Heat loss coefficient: 4 W/°C (modern insulation)
-# Heat pump electric power: 3000 W
-# Heat pump COP: 3
-# Morning peak energy demand: 150 Wh
-# Evening peak energy demand: 180 Wh
-# Morning peak time: 7:00
-# Evening peak time: 19:00
+# Tank Volume: 300 liters
+# Min Water Temperature: 20°C
+# Max Water Temperature: 60°C
+# Current Water Temperature: 50°C
+# Min Comfort Temperature: 40°C
+# Heat Loss Coefficient: 4 W/°C (modern insulation)
+# Heat Pump Electric Power: 3000 W
+# Heat Pump COP: 3
+# Morning Peak Energy Demand: 150 Wh
+# Evening Peak Energy Demand: 180 Wh
+# Morning Demand Peak Time: 7:00
+# Evening Demand Peak Time: 19:00
 
 # Resulting storage object:
 dhw_tank = DHW(
@@ -246,7 +246,7 @@ dhw_tank = DHW(
     energy_capacity=13960,                          # Thermal energy: 300L × 1.163 Wh/(L·K) × (60-20) = 13960 Wh
     max_soc=1,                                      # Up to max temperature    
     min_soc=0.5,                                    # Down to comfort temperature: (40-20) / (60-20) = 0.5
-    charge_efficiency=3,                            # Heat pump COP
+    charge_efficiency=3,                            # Heat Pump COP
     discharge_efficiency=1.0,                       # Assuming ideal efficiency for simplicity
     passive_discharge_power=160,                    # Heat loss at max temp: HLC × ΔT = 4 × (60-20) = 160 W
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
@@ -261,32 +261,32 @@ dhw_tank = DHW(
 ### Conversion Layer for Building Thermal Mass
 As a simple approach to controlling the Building Thermal Mass using a heat pump, we use a temperature offset on the weather compensation curve. The default curve is for example set to achieve a consistent indoor temperature of 20°C. By adjusting the curve up or down, we can effectively charge or discharge the building's thermal mass. Shifting energy usage from peak to off-peak periods. So the heat pump is controlled by setting it in one of three modes: +dT (charging), -dT (discharging), and 0 (neutral). The heating rate and cooldown rate of the +dT and -dT modes are empirically determined by the user. The thermal mass coefficient doesn't need to be accurately known for this control strategy as it is only used by the optimizer to estimate the amount of energy that can be shifted through preheating. The actual control behavior is determined by the empirically measured heating and cooldown rates.
 
-The SoC maps the room temperature between the min room temperature (SoC 0) and the max room temperature (SoC 1), the same approach as the DHW tank. The min and max comfort temperatures set the SoC limits. Only dropping below the min comfort temperature incurs the soft constraint penalty, so small variations within the comfort band do not force +dT charging.
+The SoC maps the room temperature between the Min Room Temperature (SoC 0) and the Max Room Temperature (SoC 1), the same approach as the DHW Tank. The Min and Max Comfort Temperatures set the SoC limits. Only dropping below the Min Comfort Temperature incurs the soft constraint penalty, so small variations within the comfort band do not force +dT charging.
 
 ```python
 # Physical input parameters:
 
-# Floor area: 100 m²
-# Thermal mass coefficient: 200 Wh/m²/°C
-# Min room temperature: 15°C (SoC 0)
-# Max room temperature: 23°C (SoC 1)
-# Current indoor temperature: 20.5°C
-# Min comfort temperature: 19°C
-# Max comfort temperature: 21°C
+# Floor Area: 100 m²
+# Thermal Mass Coefficient: 200 Wh/m²/°C
+# Min Room Temperature: 15°C (SoC 0)
+# Max Room Temperature: 23°C (SoC 1)
+# Current Indoor Temperature: 20.5°C
+# Min Comfort Temperature: 19°C
+# Max Comfort Temperature: 21°C
 #
-# Heating rate: +0.2 °C/hour (heat pump set +dT w.r.t. default curve)
-# +dT flow temperature offset: +5 °C
-# Cooldown rate: -0.1 °C/hour (heat pump set -dT w.r.t. default curve)
-# -dT flow temperature offset: -5 °C
+# Heating Rate (+dT): +0.2 °C/hour (heat pump set +dT w.r.t. default curve)
+# +dT Flow Temperature Offset: +5 °C
+# Cooldown Rate (-dT): -0.1 °C/hour (heat pump set -dT w.r.t. default curve)
+# -dT Flow Temperature Offset: -5 °C
 #
-# Heat loss coefficient: 367 W/°C
-# Outdoor temperature forecast: one value per time step (°C)
+# Heat Loss Coefficient: 367 W/°C
+# Outdoor Temperature Forecast: one value per time step (°C)
 #
-# COP model:
+# COP Model:
 # Reference COP: 3
-# Reference outdoor temperature: 7 °C
-# COP outdoor temperature coefficient: 0.1 COP/°C
-# COP flow temperature sensitivity: -0.02 -/°C
+# Reference Outdoor Temperature: 7 °C
+# COP Outdoor Temperature Coefficient: 0.1 COP/°C
+# COP Flow Temperature Sensitivity: -0.02 -/°C
 
 
 # Resulting storage object:
@@ -330,7 +330,7 @@ The optimizer solves the optimization problem using a Mixed Integer Linear Progr
 The power setpoints at t=0 can then be immediately applied to the assets, making sure that the physical devices follow the setpoints accurately. For continuous operation, this process is repeated at regular intervals to adapt to changing conditions and updated forecasts. This is known as a receding horizon or model predictive control approach. To give the actual commands to the assets, the optimizer's output must be translated into device-specific control signals. This is done through a control interface, e.g. Home Assistant.
 
 ## Optimization Objective
-The optimizer basically optimizes for a minimum or maximum of a certain objective function. In our case this is a minimization of the total energy cost over the planning horizon. Typically the following objective function is used:
+The optimizer basically optimizes for a min or max of a certain objective function. In our case this is a minimization of the total energy cost over the planning horizon. Typically the following objective function is used:
 
 $$\text{Cost} = \sum_{t=0}^{T} (\text{Grid Import Energy}_{t} \times \text{Import Price}_{t} - \text{Grid Export Energy}_{t} \times \text{Export Price}_{t})$$
 
@@ -377,7 +377,7 @@ $$\text{switch}_t \geq d_t - d_{t+1}, \quad \text{switch}_t \geq d_{t+1} - d_t$$
 
 This ensures a direct transition from charge to discharge (c: 1→0, d: 0→1) is penalized once, not twice.
 
-The parameter $\text{Switching Penalty}$ is the cost-equivalent penalty per mode change [currency units]. It trades a potentially small increase in energy cost for fewer switches; unlike [secondary objectives](#secondary-objectives), it can change which schedule is optimal. This is a soft preference, not a guaranteed minimum run length—the optimizer will accept switches if the energy cost savings justify them.
+The parameter $\text{Switching Penalty}$ is the cost-equivalent penalty per mode change [currency units]. It trades a potentially small increase in energy cost for fewer switches; unlike [secondary objectives](#secondary-objectives), it can change which schedule is optimal. This is a soft preference, not a guaranteed min run length—the optimizer will accept switches if the energy cost savings justify them.
 
 When BTM shares a heat pump with DHW (see [Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass](#mutual-exclusivity-of-charging-the-dhw-tank-and-building-thermal-mass)), the shared resource constraint forces unavoidable alternation between DHW and BTM charging; the switching penalty then discourages unnecessary additional switches within a charging or idle phase.
 
@@ -386,7 +386,7 @@ In some situations, multiple schedules result in the same total energy cost. For
 
 To avoid arbitrary solutions, the optimizer applies secondary objectives as tie-breakers. Examples include:
 
-- Minimizing the maximum grid import/export power (peak leveling).
+- Minimizing the max grid import/export power (peak leveling).
 - Preferring local storage charging over grid export.
 
 These objectives are assigned a much smaller weight than the main cost objective and therefore only influence the solution when multiple schedules have equivalent cost.
@@ -403,7 +403,7 @@ In mathematical terms:
 
 $$\sum \text{Source Power}=\sum \text{Load Power}+\sum \text{Storage Power}$$
 
-Note: The Base Load is defined as the residual of total household consumption after subtracting all explicitly modelled devices. This residual definition automatically avoids double counting in the energy balance.
+Note: The base load is defined as the residual of total household consumption after subtracting all explicitly modelled devices. This residual definition automatically avoids double counting in the energy balance.
 
 **Reference point.** Storage charge and discharge are separate non-negative decision variables, each measured where the energy leaves its origin: $P_{\text{charge}}$ on the electrical side (the power drawn from the house) and $P_{\text{discharge}}$ on the storage side (the power drawn from the stored energy). The energy balance is on the electrical side, so the Storage Power in the balance is defined as:
 
@@ -416,12 +416,12 @@ In addition to the system-level energy balance constraint, each asset contribute
 
 Examples include:
 
-- Maximum or discrete charging power
-- Maximum or discrete discharging power
-- Energy capacity
+- Max or discrete charging power
+- Max or discrete discharging power
+- Energy Capacity
 - Availability windows (charging and discharging are only allowed when the availability window is 1)
 - State-of-charge limits
-- Minimum active mode power, $P_{\min}^{\mathrm{mode}}$, for every storage asset
+- Min active mode power, $P_{\min}^{\mathrm{mode}}$, for every storage asset
 
 For storage assets, the state of charge must evolve according to the storage dynamics:
 
@@ -443,14 +443,14 @@ where:
 This ensures that energy stored in an asset remains physically consistent over time and cannot be created or destroyed.
 
 ### Controllable Load Run Continuity
-A controllable load without `run_started_at` is scheduled as one uninterrupted run within its operating window. When `run_started_at` is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again on the day the run started. If the run started on an earlier day, the load is scheduled normally within its operating window.
+A controllable load without a Run Start Time (`run_start_time`) is scheduled as one uninterrupted run within its operating window. When a Run Start Time is supplied, it marks a run already in progress: the optimizer fixes the load at its average power for the remaining run duration, regardless of the original start window or electricity prices. The run duration is the number of time steps required by `energy_demand / average_power`, rounded up to a whole time step. Once that duration has elapsed, the load is not scheduled again on the day of the Run Start Time. If the Run Start Time is on an earlier day, the load is scheduled normally within its operating window.
 
-`run_started_at` must be a timezone-aware timestamp no later than the optimization timestamp. It holds the load's latest start time, so the caller does not need to clear it after the run completes.
+The Run Start Time (`run_start_time`) must be a timezone-aware timestamp no later than the optimization timestamp. It holds the load's latest start time, so the caller does not need to clear it after the run completes.
 
 ### Mutual Exclusivity of Charge and Discharge for Storage
 Storage assets cannot simultaneously charge and discharge, enforced via the binary variables $c_t, d_t \in \{0, 1\}$ (defined in [Storage Mode Switching Penalty](#storage-mode-switching-penalty)) for charging and discharging respectively, with $c_t + d_t \leq 1$. When both are 0 the storage is idle.
 
-For any modeled charge or discharge mode, the active power must meet the universal minimum, this helps mapping the binary variables correctly:
+For any modeled charge or discharge mode, the active power must meet the universal min, this helps mapping the binary variables correctly:
 
 $$P_{\mathrm{charge},t} \geq P_{\min}^{\mathrm{mode}} c_t, \quad P_{\mathrm{discharge},t} \geq P_{\min}^{\mathrm{mode}} d_t$$
 
@@ -467,12 +467,12 @@ $$P_{\text{charge,BTM},t} = \frac{P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \
 where $P_{\text{charge,BTM}}$ is the thermal `charge_power`, $P_{\text{discharge,BTM}}$ is the thermal `discharge_power`, and $\mathrm{COP}_{+dT,t}$ converts the thermal charge power to electrical input for each time step; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
 **Exceptions**:
-- Energy demand forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
+- Energy Demand Forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
 
-- Passive discharge (losses): Passive discharge is always allowed simultaneously with charging or discharging.
+- Passive Discharge (losses): Passive discharge is always allowed simultaneously with charging or discharging.
 
 ### Mutual Exclusivity of Charging the DHW Tank and Building Thermal Mass
-DHW tank and building thermal mass typically share a single heat pump and cannot both charge simultaneously. This shared resource constraint creates unavoidable mode switches: the optimizer must alternate between charging DHW and precharging BTM based on cost and demand forecasts. The [Storage Mode Switching Penalty](#storage-mode-switching-penalty) can then be tuned to smooth these forced transitions, discouraging unnecessary additional switches within a charging or idle phase.
+DHW Tank and Building Thermal Mass typically share a single heat pump and cannot both charge simultaneously. This shared resource constraint creates unavoidable mode switches: the optimizer must alternate between charging DHW and precharging BTM based on cost and demand forecasts. The [Storage Mode Switching Penalty](#storage-mode-switching-penalty) can then be tuned to smooth these forced transitions, discouraging unnecessary additional switches within a charging or idle phase.
 
 Binary variables $c_{\text{DHW},t}$ and $c_{\text{BTM},t}$ (the charge binaries from their respective Mutual Exclusivity of Charge and Discharge constraints) enforce:
 
@@ -484,10 +484,10 @@ $$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad 
 
 where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes.
 
-This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW and building thermal mass make sure that additional priority is given to the one that has SoC below minimum. When both DHW and building thermal mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
+This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW Tank and Building Thermal Mass make sure that additional priority is given to the one that has SoC below min. When both DHW Tank and Building Thermal Mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
 
 ### Soft Constraints
-Some constraints, like minimum and maximum state-of-charge limits, are implemented as soft constraints. Rather than making the optimization problem infeasible, violations are allowed but receive a large penalty cost in the objective function.
+Some constraints, like min and max state-of-charge limits, are implemented as soft constraints. Rather than making the optimization problem infeasible, violations are allowed but receive a large penalty cost in the objective function.
 
 This ensures the optimizer always returns the best achievable solution while strongly discouraging constraint violations.
 

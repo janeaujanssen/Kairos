@@ -48,7 +48,7 @@ No assets added by default.
 ### Asset Structure (Each Expandable, by default collapsed)
 A repeating structure for each asset, to minimize code repetition.
 
-Three columns layout: Left for physical inputs according to asset type (see `backend_architecture.md` for defaults), middle for showing converted generic inputs in json format, exactly as they will be sent to the optimizer, but everything collapsed except for the top level keys, and right for forecast inputs (if applicable) where the forecast charts are based on (as described below), allowing users to modify the underlying parameters and immediately see the impact on the forecasts.
+Three columns layout: Left for physical inputs according to asset type (see `optimizer_architecture.md` for defaults), middle for showing converted generic inputs in json format, exactly as they will be sent to the optimizer, but everything collapsed except for the top level keys, and right for forecast inputs (if applicable) where the forecast charts are based on (as described below), allowing users to modify the underlying parameters and immediately see the impact on the forecasts.
 
 The Physical inputs should have the same units as requested by the API, with the exception of:
 - **Energy prices**: [price/kWh]
