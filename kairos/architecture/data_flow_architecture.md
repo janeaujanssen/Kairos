@@ -505,10 +505,26 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 </details>
 
 <details>
-<summary>System</summary>
+<summary>Diagnostic</summary>
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
 | Objective Cost | - | Entity created by Kairos (diagnostic) | Objective cost of the latest successful optimization. Attribute: optimization ID. |
 | Last Optimization Attempt | - | Entity created by Kairos (diagnostic) | Result of the latest API call: `HTTP <code>`, `API <status>`, `Request error` or `No response`. Attributes: HTTP status, API request, API response, error. |
+</details>
+
+<details>
+<summary>Optimizer forecasts</summary>
+
+Each entity holds the forecast the optimizer used, in the same unit, as a `Forecast` attribute with time and value pairs for the planning horizon (same as Power Setpoint). Only created for the assets listed.
+
+| Name | Unit | Type | Description |
+|---|---|---|---|
+| Grid Import Price Forecast | price/kWh | Entity created by Kairos (forecast) | Import price per time step. Created for Grid. |
+| Grid Export Price Forecast | price/kWh | Entity created by Kairos (forecast) | Export price per time step. Created for Grid. |
+| Solar Production Power Forecast | W | Entity created by Kairos (forecast) | Solar production per time step. Created for Solar when Solar Enabled is true. |
+| Base Load Power Forecast | W | Entity created by Kairos (forecast) | Base load per time step, built from Base Load Power (+/- Sensor). Created for Base Load. |
+| Energy Demand Forecast | Wh per time step | Entity created by Kairos (forecast) | Useful energy demand per time step. Created for every storage asset. |
+| Passive Discharge Power Forecast | W per time step | Entity created by Kairos (forecast) | Passive discharge per time step. Created for every storage asset. |
+| COP Forecast | - | Entity created by Kairos (forecast) | Heat pump COP per time step in default curve mode. Created for Building Thermal Mass. |
 </details>

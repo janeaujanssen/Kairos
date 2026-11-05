@@ -15,7 +15,7 @@ Power is in W, energy in Wh, prices in price/Wh. Energy per step = power * dt.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import pulp
@@ -49,6 +49,7 @@ class OptimizationResult:
     assets: dict[str, dict]
     termination_reason: str | None = None
     relative_mip_gap: float = 0.0
+    forecasts: dict[str, dict[str, list[dict]]] = field(default_factory=dict)
 
 
 def _cbc_termination_reason(solution_header: str) -> str | None:
@@ -558,6 +559,31 @@ def optimize(
                 for i in range(n_steps)
             ]
 
+    forecasts = {
+        grid.id: {
+            # Output prices are per kWh; the optimizer works in price/Wh.
+            "import_price": _forecast_series([p * 1000 for p in grid.import_price_forecast], start, step_hours),
+            "export_price": _forecast_series([p * 1000 for p in grid.export_price_forecast], start, step_hours),
+        }
+    }
+    for source in sources:
+        if isinstance(source, PV):
+            forecasts[source.id] = {"power": _forecast_series(source.power_forecast, start, step_hours)}
+    for load in loads:
+        if isinstance(load, BaseLoad):
+            forecasts[load.id] = {"power": _forecast_series(load.power_forecast, start, step_hours)}
+    for s in storage:
+        passive = s.passive_discharge_power
+        if not isinstance(passive, list):
+            passive = [passive] * n_steps
+        storage_forecasts = {
+            "energy_demand": _forecast_series(s.energy_demand_forecast or [0.0] * n_steps, start, step_hours),
+            "passive_discharge_power": _forecast_series(passive, start, step_hours),
+        }
+        if isinstance(s, BTM):
+            storage_forecasts["cop"] = _forecast_series(s.cop_forecast, start, step_hours)
+        forecasts[s.id] = storage_forecasts
+
     return OptimizationResult(
         status="Optimal" if prob.sol_status == pulp.LpSolutionOptimal else "Feasible",
         objective_cost=float(pulp.value(objective)),
@@ -565,6 +591,7 @@ def optimize(
         assets=assets,
         termination_reason=solver.termination_reason,
         relative_mip_gap=relative_mip_gap,
+        forecasts=forecasts,
     )
 
 
@@ -575,6 +602,13 @@ def _check_len(name: str, values: list, n_steps: int) -> None:
     """Raise if a forecast does not have one value per time step."""
     if len(values) != n_steps:
         raise ValueError(f"{name} has {len(values)} entries, expected {n_steps}")
+
+
+def _forecast_series(values: list[float], start: datetime, step_hours: float) -> list[dict]:
+    return [
+        {"time": (start + timedelta(hours=i * step_hours)).isoformat(), "value": float(v)}
+        for i, v in enumerate(values)
+    ]
 
 
 def _steps_since(start: datetime, t: datetime, dt: float) -> float:

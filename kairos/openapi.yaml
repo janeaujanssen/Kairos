@@ -666,8 +666,16 @@ components:
           description: Schedules keyed by asset ID. Power schedule times mark interval starts; storage SoC schedule times mark interval ends.
           additionalProperties:
             $ref: '#/components/schemas/AssetSchedule'
+        forecasts:
+          type: object
+          description: Forecasts used by the optimizer, keyed by asset ID, then by forecast name. Grid has import_price and export_price [price/kWh]. PV and base load have power [W]. Storage has energy_demand [Wh] and passive_discharge_power [W], and building thermal mass also has cop [-]. Times mark interval starts.
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: array
+              items:
+                $ref: '#/components/schemas/SchedulePoint'
 
-    LatestOptimizationRecord:
       type: object
       required:
         - request

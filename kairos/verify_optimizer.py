@@ -174,6 +174,12 @@ assert abs(peak_result.objective_cost - 22.0) < 1e-8, (
 )
 print("objective_cost includes the full optimized objective: OK")
 
+assert peak_result.forecasts["grid"]["import_price"][0]["value"] == 200.0
+assert abs(peak_result.forecasts["grid"]["export_price"][0]["value"] - 50.0) < 1e-8
+assert peak_result.forecasts["peak-base"]["power"][0]["value"] == 100.0
+assert peak_result.forecasts["grid"]["import_price"][0]["time"] == "2026-01-01T00:00:00+00:00"
+print("forecasts are returned in price/kWh and W: OK")
+
 for name, current_soc, minimum, maximum, demand, expected_soc, min_cost in (
     ("below minimum", 0.5, 0.2, 0.9, 400.0, 0.1, 10000.0),
     ("above maximum", 0.8, 0.1, 0.5, 0.0, 0.8, 50000.0),

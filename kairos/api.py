@@ -84,6 +84,7 @@ class OptimizationResponse(BaseModel):
     objective_cost: float
     schedule_time_step: float
     assets: dict[str, AssetSchedule]
+    forecasts: dict[str, dict[str, list[SchedulePoint]]] = {}
 
 
 class HealthResponse(BaseModel):
@@ -137,6 +138,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         objective_cost=result.objective_cost,
         schedule_time_step=result.time_step_minutes,
         assets=result.assets,
+        forecasts=result.forecasts,
     )
     app.state.latest_optimization = {
         "request": jsonable_encoder(request),
