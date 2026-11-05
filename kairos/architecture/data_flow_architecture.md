@@ -500,7 +500,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
-| Power Setpoint | W | Entity created by Kairos | Setpoint for the current time step. Storage: positive is charge, negative is discharge. Building Thermal Mass: the full heat pump electrical power in each mode, so it is never negative. Loads: zero or positive. Becomes `unavailable` when the schedule runs out. Has `Forecast` attribute that contains the full scheduled forecast (time and value pairs) for the planning horizon. Created for Grid, Controllable Load, Home Battery, EV Battery, DHW Tank and Building Thermal Mass. |
+| Power Setpoint | W | Entity created by Kairos | Setpoint for the current time step. Storage: positive is charge, negative is discharge. Building Thermal Mass: the full heat pump electrical power in each mode, so it is never negative. Loads: zero or positive. Becomes `unavailable` when the schedule runs out. Has `forecast` attribute that contains the full scheduled forecast (time and value pairs) for the planning horizon. Created for Grid, Controllable Load, Home Battery, EV Battery, DHW Tank and Building Thermal Mass. |
 | Mode | - | Entity created by Kairos | Building Thermal Mass only. `charge` (+dT), `neutral` (0) or `discharge` (-dT). Use this rather than the setpoint to control the heat pump. |
 </details>
 
@@ -516,7 +516,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 <details>
 <summary>Optimizer forecasts</summary>
 
-Each entity holds the forecast the optimizer used, in the same unit, as a `Forecast` attribute with time and value pairs for the planning horizon (same as Power Setpoint). Only created for the assets listed.
+Each entity holds the forecast the optimizer used, in the same unit, as a `forecast` attribute with time and value pairs for the planning horizon (same as Power Setpoint). Only created for the assets listed.
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
