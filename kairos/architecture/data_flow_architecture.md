@@ -496,7 +496,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 
 ### 📋 Exposed Output Entities
 <details>
-<summary>Per asset</summary>
+<summary>Control</summary>
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
@@ -511,6 +511,10 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 |---|---|---|---|
 | Objective Cost | - | Entity created by Kairos (diagnostic) | Objective cost of the latest successful optimization. Attribute: optimization ID. |
 | Last Optimization Attempt | - | Entity created by Kairos (diagnostic) | Result of the latest API call: `HTTP <code>`, `API <status>`, `Request error` or `No response`. Attributes: HTTP status, API request, API response, error. |
+| Heat Loss Coefficient | W/°C | Entity created by Kairos (diagnostic) | ✅ Passed 1:1 from API. |
+| Reference COP | - | Entity created by Kairos (diagnostic) | ✅ Passed 1:1 from API. |
+| Reference Outdoor Temperature | °C | Entity created by Kairos (diagnostic) | ✅ Passed 1:1 from API. |
+| COP Outdoor Temperature Coefficient | COP/°C | Entity created by Kairos (diagnostic) | ✅ Passed 1:1 from API. |
 </details>
 
 <details>

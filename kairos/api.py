@@ -77,6 +77,13 @@ class AssetSchedule(BaseModel):
     mode: list[ModeSchedulePoint] | None = None
 
 
+class BuildingThermalMassParameters(BaseModel):
+    heat_loss_coefficient: float
+    reference_cop: float
+    reference_outdoor_temperature: float
+    cop_outdoor_temperature_coefficient: float
+
+
 class OptimizationResponse(BaseModel):
     status: str
     termination_reason: str | None = None
@@ -85,6 +92,7 @@ class OptimizationResponse(BaseModel):
     schedule_time_step: float
     assets: dict[str, AssetSchedule]
     forecasts: dict[str, dict[str, list[SchedulePoint]]] = {}
+    building_thermal_mass: dict[str, BuildingThermalMassParameters] = {}
 
 
 class HealthResponse(BaseModel):
@@ -131,6 +139,18 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e)) from e
 
+    # Only physical building_thermal_mass payloads carry reference_cop; generic payloads do not.
+    building_thermal_mass = {
+        s["id"]: BuildingThermalMassParameters(
+            heat_loss_coefficient=s["heat_loss_coefficient"],
+            reference_cop=s["reference_cop"],
+            reference_outdoor_temperature=s["reference_outdoor_temperature"],
+            cop_outdoor_temperature_coefficient=s["cop_outdoor_temperature_coefficient"],
+        )
+        for s in request.storage
+        if "reference_cop" in s
+    }
+
     response = OptimizationResponse(
         status=result.status,
         termination_reason=result.termination_reason,
@@ -139,6 +159,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         schedule_time_step=result.time_step_minutes,
         assets=result.assets,
         forecasts=result.forecasts,
+        building_thermal_mass=building_thermal_mass,
     )
     app.state.latest_optimization = {
         "request": jsonable_encoder(request),

@@ -675,6 +675,36 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/SchedulePoint'
+        building_thermal_mass:
+          type: object
+          description: Building thermal mass model parameters used by the optimizer, keyed by asset ID. Passed 1:1 from the request.
+          additionalProperties:
+            $ref: '#/components/schemas/BuildingThermalMassParameters'
+
+    BuildingThermalMassParameters:
+      type: object
+      required:
+        - heat_loss_coefficient
+        - reference_cop
+        - reference_outdoor_temperature
+        - cop_outdoor_temperature_coefficient
+      properties:
+        heat_loss_coefficient:
+          type: number
+          description: Heat loss coefficient [W/°C].
+          example: 430.0
+        reference_cop:
+          type: number
+          description: Heat pump COP at the reference outdoor temperature [-].
+          example: 3.0
+        reference_outdoor_temperature:
+          type: number
+          description: Outdoor temperature at which reference_cop applies [°C].
+          example: 7.0
+        cop_outdoor_temperature_coefficient:
+          type: number
+          description: Change in COP per °C of outdoor temperature [COP/°C].
+          example: 0.1
 
     LatestOptimizationRecord:
       type: object
