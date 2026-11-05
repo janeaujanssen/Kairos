@@ -1,7 +1,8 @@
 # Optimizer Architecture for Kairos
 ###  Easy, optimized energy scheduling for Home Assistant
 
-> **Status:** Final. This document describes the optimizer architecture of Kairos, including the energy device abstraction, the optimizer, and the storage classes.
+> **Status:** Final.
+> 
 > **To Do:**
 > - Solar curtailment: Solar is a decision variable that allows reducing Solar output when necessary, not to be implemented yet.
 
@@ -266,20 +267,20 @@ The SoC maps the room temperature between the Min Room Temperature (SoC 0) and t
 ```python
 # Physical input parameters:
 
-# Floor Area: 100 m²
+# Floor Area: 400 m²
 # Thermal Mass Coefficient: 200 Wh/m²/°C
 # Min Room Temperature: 15°C (SoC 0)
 # Max Room Temperature: 23°C (SoC 1)
 # Current Indoor Temperature: 20.5°C
-# Min Comfort Temperature: 19°C
-# Max Comfort Temperature: 21°C
+# Min Comfort Temperature: 20°C
+# Max Comfort Temperature: 22°C
 #
-# Heating Rate (+dT): +0.2 °C/hour (heat pump set +dT w.r.t. default curve)
+# Heating Rate (+dT): +0.03 °C/hour (heat pump set +dT w.r.t. default curve)
 # +dT Flow Temperature Offset: +5 °C
-# Cooldown Rate (-dT): -0.1 °C/hour (heat pump set -dT w.r.t. default curve)
+# Cooldown Rate (-dT): -0.03 °C/hour (heat pump set -dT w.r.t. default curve)
 # -dT Flow Temperature Offset: -5 °C
 #
-# Heat Loss Coefficient: 367 W/°C
+# Heat Loss Coefficient: 430 W/°C
 # Outdoor Temperature Forecast: one value per time step (°C)
 #
 # COP Model:
@@ -294,19 +295,19 @@ building_thermal_mass = BTM(
     # General storage attributes
     name="Building Thermal Mass",
     current_soc=0.69,                               # (20.5 - 15) / (23 - 15) = 0.69
-    energy_capacity=160000,                         # 100 m² × 200 Wh/m²/°C × (23 - 15)°C = 160000 Wh
-    max_soc=0.75,                                   # (21 - 15) / (23 - 15) = 0.75
-    min_soc=0.5,                                    # (19 - 15) / (23 - 15) = 0.5
+    energy_capacity=640000,                         # 400 m² × 200 Wh/m²/°C × (23 - 15)°C = 640000 Wh
+    max_soc=0.8,                                    # (22 - 15) / (23 - 15) = 0.8
+    min_soc=0.55,                                   # (20 - 15) / (23 - 15) = 0.55
     charge_efficiency=0,                            # For building thermal mass, COP model is used
     discharge_efficiency=1,                         # Thermal efficiency, assuming ideal efficiency for simplicity
-    passive_discharge_power=[1000, 1500, ... 1200, 800], # W, heat loss per time step using 367 W/°C * (assumed indoor temperature - outdoor temperature forecast)
+    passive_discharge_power=[1000, 1500, ... 1200, 800], # W, heat loss per time step using Heat Loss Coefficient × (Current Indoor Temperature - Outdoor Temperature Forecast)
     discharge_to_electrical_network=False,          # Thermal storage does not discharge to the electrical network
     energy_demand_forecast=[0, 0, ... 0, 0],        # Not relevant for building thermal mass
     availability_window=[1, 1, ... 1, 1],           # Always connected and available
 
     # Class specific attributes
-    charge_power=4000,                              # Thermal power: 20000 Wh/°C * 0.2 °C/hour = 4000 W, this is not a max power value but a discretely defined power
-    discharge_power=2000,                           # Thermal power: 20000 Wh/°C * 0.1 °C/hour = 2000 W, this is not a max power value but a discretely defined power
+    charge_power=2400,                              # Thermal power: 80000 Wh/°C * 0.03 °C/hour = 2400 W, this is not a max power value but a discretely defined power
+    discharge_power=2400,                           # Thermal power: 80000 Wh/°C * 0.03 °C/hour = 2400 W, this is not a max power value but a discretely defined power
     cop_forecast=[3, 2.5, ... 3.2, 2.9],            # Forecasted COP values for each time step (in default curve mode), COP = COP_reference + COP_outdoor_coefficient * (outdoor_temperature_forecast - cop_reference_outdoor_temperature)
     plus_dt=5,                                      # °C flow-temperature offset
     minus_dt=-5,                                    # °C flow-temperature offset
@@ -316,7 +317,7 @@ building_thermal_mass = BTM(
 
 The +dT and -dT COPs are derived from the default curve COP, with the flow temperature offset $\Delta T$ of the mode (`plus_dt` or `minus_dt`):
 
-$$\text{COP}_{\mathrm{mode},t} = \text{COP}_{\mathrm{default},t} \times (1 - \text{cop\_flow\_sensitivity} \times \Delta T_{\mathrm{mode}})$$
+$$\text{COP}_{\mathrm{mode},t} = \text{COP}_{\mathrm{default},t} \times (1 + \text{cop\_flow\_sensitivity} \times \Delta T_{\mathrm{mode}})$$
 
 # Optimizer
 ## High Level Process
@@ -409,7 +410,7 @@ Note: The base load is defined as the residual of total household consumption af
 
 $${\text{Storage Power}} = P_{\text{charge}} - \eta_{\mathrm{discharge}} \, P_{\text{discharge}}$$
 
-For DHW Tank, discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance. For Building Thermal Mass, $P_{\text{charge}}$ is the electrical power of the heat pump, its discharge is thermal and does not enter the balance.
+For DHW Tank, discharge does not return electrical energy to the house, so only $P_{\text{charge}}$ enters the balance. For Building Thermal Mass, the electrical power of the heat pump in each mode enters the balance: $(P_{\text{loss}} + P_{\text{charge,BTM}}) / \mathrm{COP}_{+dT}$ in +dT, $P_{\text{loss}} / \mathrm{COP}_{\text{default}}$ in neutral, and $\max(0, P_{\text{loss}} - P_{\text{discharge,BTM}}) / \mathrm{COP}_{-dT}$ in -dT. The thermal discharge itself does not enter the balance.
 
 ### Asset Constraints
 In addition to the system-level energy balance constraint, each asset contributes its own physical and operational constraints.
@@ -434,9 +435,10 @@ where:
 - $P_{\mathrm{charge}}$ represents charging power [W].
 - $P_{\mathrm{discharge}}$ represents discharge power [W] which is controlled by the optimization algorithm.
 - $E_{\mathrm{demand}}$ represents the forecasted useful energy demand [Wh] per time step that must be supplied by the storage.
-- $\eta_{\mathrm{charge}}$ represents the charging efficiency [-]. For BTM the SoC term is the thermal shift $Q_{\text{charge,BTM}}$ with $\eta_{\mathrm{charge}} = 1$, see below.
+- $\eta_{\mathrm{charge}}$ represents the charging efficiency [-]. For BTM the charge term is the heat pump thermal output $Q_{\text{HP,BTM}} = \mathrm{COP} \times P_{\text{electrical}}$ with $\eta_{\mathrm{charge}} = 1$, see below.
+- For BTM, $P_{\mathrm{discharge}} = 0$. The cooldown is already in the heat pump output: $Q_{\text{HP,BTM}} = P_{\text{loss}} + Q_{\text{charge,BTM}}$ in +dT, $P_{\text{loss}}$ in neutral, and $\max(0, P_{\text{loss}} - Q_{\text{discharge,BTM}})$ in -dT. The SoC change is then $+Q_{\text{charge,BTM}}$ in +dT, $0$ in neutral, and $-Q_{\text{discharge,BTM}}$ in -dT (when the heat pump is not fully off).
 - $\eta_{\mathrm{discharge}}$ represents the discharging efficiency [-].
-- $P_{\mathrm{loss}}$ represents passive storage losses [W].
+- $P_{\mathrm{loss}}$ represents passive storage losses [W]. For BTM it is the passive heat loss $\mathrm{HLC} \times (T_{\text{indoor}} - T_{\text{outdoor}})$.
 - $C$ represents the storage capacity [Wh].
 - $\Delta t$ represents the time step duration [h].
 
@@ -462,9 +464,9 @@ where $P_{\text{charge}}^{\max}$ and $P_{\text{discharge}}^{\max}$ are `max_char
 
 For a `BTM`, the power is discrete (the heat pump is in +dT, -dT or neutral mode). With binary $c_{\text{BTM},t}$ for +dT mode and binary $d_{\text{BTM},t}$ for -dT mode:
 
-$$P_{\text{charge,BTM},t} = \frac{P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
+$$P_{\text{charge,BTM},t} = \frac{P_{\text{loss},t} + P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}, \quad P_{\text{discharge,BTM},t} = P_{\text{discharge,BTM}} \cdot d_{\text{BTM},t}, \quad c_{\text{BTM},t} + d_{\text{BTM},t} \leq 1$$
 
-where $P_{\text{charge,BTM}}$ is the thermal `charge_power`, $P_{\text{discharge,BTM}}$ is the thermal `discharge_power`, and $\mathrm{COP}_{+dT,t}$ converts the thermal charge power to electrical input for each time step; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
+where $P_{\text{charge,BTM}}$ is the thermal `charge_power`, $P_{\text{discharge,BTM}}$ is the thermal `discharge_power`, $P_{\text{loss},t}$ is the passive heat loss of the BTM per time step, and $\mathrm{COP}_{+dT,t}$ converts the heat pump thermal output (passive loss plus thermal charge) to electrical input for each time step; each configured mode power must meet $P_{\min}^{\mathrm{mode}}$. When both binaries are 0 the heat pump runs in neutral mode (default curve).
 
 **Exceptions**:
 - Energy Demand Forecast: Discharging through the energy demand forecast is allowed simultaneously with charging or discharging. 
@@ -480,9 +482,9 @@ $$c_{\text{DHW},t} + c_{\text{BTM},t} \leq 1$$
 
 with the discrete charging power defined by:
 
-$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = \frac{P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}$$
+$$P_{\text{charge,DHW},t} = P_{\text{charge,DHW}} \cdot c_{\text{DHW},t}, \quad P_{\text{charge,BTM},t} = \frac{P_{\text{loss},t} + P_{\text{charge,BTM}}}{\mathrm{COP}_{+dT,t}} \cdot c_{\text{BTM},t}$$
 
-where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes.
+where $P_{\text{charge,DHW}}$ and $P_{\text{charge,BTM}}$ are the `charge_power` attributes of the `DHW` and `BTM` classes, and $P_{\text{loss},t}$ is the passive heat loss of the BTM at time step $t$.
 
 This models the shared heat pump resource bottleneck and forces the optimizer to prioritize between immediate DHW demand and precharging thermal mass for cost optimization. SoC constraints for both DHW Tank and Building Thermal Mass make sure that additional priority is given to the one that has SoC below min. When both DHW Tank and Building Thermal Mass SoC fall below their comfort thresholds simultaneously, DHW priority is enforced by assigning a higher penalty weight to DHW SoC violations than to building thermal mass SoC violations. This reflects how heat pumps typically enforce DHW priority in their firmware.
 
@@ -526,10 +528,10 @@ Example response:
 {
   "status": "Optimal",
   "objective_cost": 0.42,
-  "time_step_minutes": 15,
+  "schedule_time_step": 15,
   "assets": {
     "grid_1": {
-      "setpoint": 1200.0,
+      "power_setpoint": 1200.0,
       "unit": "W",
       "schedule": [
         { "time": "2026-10-05T14:00:00+02:00", "value": 1200.0 },
@@ -539,7 +541,7 @@ Example response:
       ]
     },
     "home_battery": {
-      "setpoint": 2500.0,
+      "power_setpoint": 2500.0,
       "unit": "W",
       "schedule": [
         { "time": "2026-10-05T14:00:00+02:00", "value": 2500.0 },
@@ -555,7 +557,7 @@ Example response:
       ]
     },
     "dishwasher": {
-      "setpoint": 1500.0,
+      "power_setpoint": 1500.0,
       "unit": "W",
       "schedule": [
         { "time": "2026-10-05T14:00:00+02:00", "value": 1500.0 },

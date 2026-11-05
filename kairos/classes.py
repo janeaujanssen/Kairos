@@ -69,7 +69,7 @@ class Storage:
     min_soc: float = 0.0
     charge_efficiency: float = 1.0
     discharge_efficiency: float = 1.0
-    passive_discharge_power: float = 0.0  # W
+    passive_discharge_power: float | list[float] = 0.0  # W, scalar or per step
     discharge_to_electrical_network: bool = False
     energy_demand_forecast: list[float] = field(default_factory=list)  # Wh per step
     availability_window: list[int] = field(default_factory=list)  # 1/0 per step
@@ -89,6 +89,9 @@ class DHW(Storage):
 
 @dataclass
 class BTM(Storage):
-    charge_power: float = 0.0  # W, discrete electric power in +dT mode
+    charge_power: float = 0.0  # W, discrete thermal power in +dT mode
     discharge_power: float = 0.0  # W, discrete thermal power in -dT mode
-    default_efficiency: float = 1.0  # heat pump COP in default curve mode
+    cop_forecast: list[float] = field(default_factory=list)  # default curve COP per step
+    plus_dt: float = 0.0  # °C flow temperature offset in +dT mode
+    minus_dt: float = 0.0  # °C flow temperature offset in -dT mode
+    cop_flow_sensitivity: float = 0.0  # fraction per °C

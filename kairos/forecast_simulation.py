@@ -79,6 +79,27 @@ def pv_power_forecast(
     return forecast
 
 
+def outdoor_temperature_forecast(
+    hours: list[float],
+    min_temperature: float,
+    max_temperature: float,
+) -> list[float]:
+    """
+    Generate outdoor temperature forecast as a daily sinusoid, minimum at midnight and maximum at noon.
+
+    Args:
+        hours: Hour of day for each timestep (0-24)
+        min_temperature: Outdoor temperature at midnight [°C]
+        max_temperature: Outdoor temperature at noon [°C]
+
+    Returns:
+        Outdoor temperature forecast [°C] per timestep
+    """
+    mean = (min_temperature + max_temperature) / 2
+    half_swing = (max_temperature - min_temperature) / 2
+    return [mean - half_swing * math.cos(2 * math.pi * h / 24) for h in hours]
+
+
 def base_load_forecast(
     hours: list[float],
     baseline_consumption: float,

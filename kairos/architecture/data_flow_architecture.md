@@ -209,7 +209,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 | Thermal Mass Coefficient | Wh/m²/°C | Parameter | Heat storage capacity of the building per m² of floor area. This does not need be an exact number, the default is generally fine. |
 | Heating Rate (+dT) | °C/h | Parameter | Indoor temperature rise per hour in +dT (charge) mode. Empirically determined. Used with Floor Area and Thermal Mass Coefficient to calculate the charge power. |
 | +dT Flow Temperature Offset | °C | Parameter | Flow temperature offset on the weather compensation curve in +dT mode. |
-| Cooldown Rate (-dT) | °C/h | Parameter | Indoor temperature drop per hour in -dT (discharge) mode. Empirically determined. Used with Floor Area and Thermal Mass Coefficient to calculate the discharge power. |
+| Cooldown Rate (-dT) | °C/h | Parameter | Indoor temperature change per hour in -dT (discharge) mode, entered as a negative value. Empirically determined. Used with Floor Area and Thermal Mass Coefficient to calculate the discharge power. |
 | -dT Flow Temperature Offset | °C | Parameter | Flow temperature offset on the weather compensation curve in -dT mode. |
 | COP Flow Temperature Sensitivity | -/°C | Parameter | Fractional change in COP per °C of flow temperature offset, e.g. -0.02 = -2%/°C. |
 
@@ -481,12 +481,12 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 | Min State of Charge | 0-1 | Object attribute | Converted from Min Comfort Temperature, on the same scale as Current State of Charge. |
 | Charge Efficiency | - | Object attribute | Set to 0. The COP Forecast is used instead. |
 | Discharge Efficiency | - | Object attribute | Fixed at 1. |
-| Passive Discharge Power | W per time step | Object attribute | Heat loss per time step: Heat Loss Coefficient × (assumed indoor temperature − Outdoor Temperature Forecast). |
+| Passive Discharge Power | W per time step | Object attribute | Heat loss per time step: Heat Loss Coefficient × (Current Indoor Temperature − Outdoor Temperature Forecast). |
 | Discharge to Electrical Network | - | Object attribute | Fixed per class: `no`. |
 | Energy Demand Forecast | Wh per time step | Object attribute | Zero for every time step. |
 | Availability Window | 1/0 per time step | Object attribute | Always 1. |
 | Charge Power | W | Object attribute | Discrete thermal power in +dT mode: Floor Area × Thermal Mass Coefficient × Heating Rate (+dT). |
-| Discharge Power | W | Object attribute | Discrete thermal power in -dT mode: Floor Area × Thermal Mass Coefficient × Cooldown Rate (-dT). |
+| Discharge Power | W | Object attribute | Discrete thermal power in -dT mode, stored as a positive magnitude: −(Floor Area × Thermal Mass Coefficient × Cooldown Rate (-dT)). |
 | COP Forecast | - | Object attribute | Per time step, default curve: Reference COP + COP Outdoor Temperature Coefficient × (Outdoor Temperature Forecast − Reference Outdoor Temperature). |
 | +dT Flow Temperature Offset | °C | Object attribute | ✅ Passed 1:1. |
 | -dT Flow Temperature Offset | °C | Object attribute | ✅ Passed 1:1. |
@@ -500,7 +500,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
-| Power Setpoint | W | Entity created by Kairos | Setpoint for the current time step. Storage: positive is charge, negative is discharge. Loads: zero or positive. Becomes `unavailable` when the schedule runs out. Has `Forecast` attribute that contains the full scheduled forecast (time and value pairs) for the planning horizon. Created for Grid, Controllable Load, Home Battery, EV Battery, DHW Tank and Building Thermal Mass. |
+| Power Setpoint | W | Entity created by Kairos | Setpoint for the current time step. Storage: positive is charge, negative is discharge. Building Thermal Mass: the full heat pump electrical power in each mode, so it is never negative. Loads: zero or positive. Becomes `unavailable` when the schedule runs out. Has `Forecast` attribute that contains the full scheduled forecast (time and value pairs) for the planning horizon. Created for Grid, Controllable Load, Home Battery, EV Battery, DHW Tank and Building Thermal Mass. |
 | Mode | - | Entity created by Kairos | Building Thermal Mass only. `charge` (+dT), `neutral` (0) or `discharge` (-dT). Use this rather than the setpoint to control the heat pump. |
 </details>
 

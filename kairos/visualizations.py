@@ -26,6 +26,12 @@ COST_COLORS = {
 
 GRAY = "#7f7f7f"
 
+BTM_MODE_MARKERS = {
+    "charge": ("charge", {"pattern": {"shape": "/"}}),
+    "neutral": ("neutral", {"pattern": {"shape": "x"}}),
+    "discharge": ("discharge", {}),
+}
+
 
 def asset_color(asset_type: str, instance_index: int = 0) -> str:
     """Return the palette color for an asset type and its zero-based instance index."""
@@ -72,6 +78,15 @@ def area_chart(timestamps, power_w: list[float], series_name: str, color: str, u
     return style(fig, unit)
 
 
+def step_chart(timestamps, values: list[float], series_name: str, color: str, unit: str) -> go.Figure:
+    """Create a step line chart, holding each value over its timestep."""
+    fig = go.Figure(go.Scatter(
+        x=timestamps, y=values, name=series_name, line=dict(color=color), line_shape="hvh",
+        hovertemplate="%{y:.1f} " + unit + "<extra></extra>"
+    ))
+    return style(fig, unit)
+
+
 def bar_chart(timestamps, values: list[float], series_name: str, color: str, unit: str = "Wh") -> go.Figure:
     """Create a bar chart."""
     fig = go.Figure(go.Bar(
@@ -87,12 +102,14 @@ def power_flow_chart(
     storage_types_by_id: dict[str, str] | None = None,
     controllable_ids: list[str] | None = None, names_by_id: dict[str, str] | None = None,
     base_load_name: str = "Base Load", pv_name: str = "Solar Production", grid_name: str = "Net Grid Power",
+    modes_by_id: dict[str, list[str]] | None = None,
 ) -> go.Figure:
     """Create power flow chart with load, storage, and grid per UI architecture."""
     fig = go.Figure()
     storage_types_by_id = storage_types_by_id or {}
     controllable_ids = controllable_ids or []
     names_by_id = names_by_id or {}
+    modes_by_id = modes_by_id or {}
     color_indices = _storage_color_indices(storage_ids, storage_types_by_id)
 
     # Zero line reference
@@ -116,7 +133,18 @@ def power_flow_chart(
     for storage_id in storage_ids:
         asset_type = storage_types_by_id.get(storage_id, "home_battery")
         color = asset_color(asset_type, color_indices[storage_id])
-        fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=names_by_id.get(storage_id, storage_id), marker_color=color,
+        name = names_by_id.get(storage_id, storage_id)
+        if storage_id in modes_by_id:
+            # BTM: one bar series per heat pump mode so the mode is visible in the chart
+            for mode, (label, marker) in BTM_MODE_MARKERS.items():
+                values = [w if m == mode else 0.0 for w, m in zip(storage_schedule_w[storage_id], modes_by_id[storage_id])]
+                marker = dict(color=color, **marker)
+                if "pattern" in marker:
+                    marker["pattern"] = {**marker["pattern"], "bgcolor": color, "fgcolor": "#000000A3"}
+                fig.add_bar(x=timestamps, y=values, name=f"{name} ({label})", marker=marker,
+                            hovertemplate="%{y:.1f} W<extra></extra>")
+            continue
+        fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=name, marker_color=color,
                     hovertemplate="%{y:.1f} W<extra></extra>")
     
     # Supply side - Grid and Solar (lines)
@@ -227,12 +255,12 @@ def soc_chart(
 
 def forecast_chart(
     asset_type: str, payload: dict, generic, timestamps, forecast: dict = None, color_index: int = 0
-) -> go.Figure | None:
-    """Forecast chart for assets that have time-series forecasts."""
+) -> go.Figure | list[go.Figure] | None:
+    """Forecast chart for assets that have time-series forecasts. Building thermal mass returns three charts."""
     if asset_type == "grid" and forecast:
         # Convert prices back from $/Wh to $/kWh for display (multiply by 1000)
-        import_prices_kwh = [p * 1000 for p in payload["import_price_forecast"]]
-        export_prices_kwh = [p * 1000 for p in payload["export_price_forecast"]]
+        import_prices_kwh = [p * 1000 for p in payload["grid_import_price_forecast"]]
+        export_prices_kwh = [p * 1000 for p in payload["grid_export_price_forecast"]]
         fig = go.Figure()
         fig.add_scatter(x=timestamps, y=import_prices_kwh, name="Import price",
                         line=dict(color=COST_COLORS["cost"]), line_shape="hv",
@@ -249,4 +277,11 @@ def forecast_chart(
         return bar_chart(timestamps, generic.energy_demand_forecast, "EV Battery energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
     if asset_type == "dhw_tank" and generic is not None:
         return bar_chart(timestamps, generic.energy_demand_forecast, "DHW Tank energy demand forecast", asset_color(asset_type, color_index), unit="Wh")
+    if asset_type == "building_thermal_mass":
+        color = asset_color(asset_type, color_index)
+        charts = [step_chart(timestamps, payload["outdoor_temperature_forecast"], "Outdoor temperature forecast", color, unit="°C")]
+        if generic is not None:
+            charts.append(bar_chart(timestamps, generic.passive_discharge_power, "Passive discharge power", color, unit="W"))
+            charts.append(step_chart(timestamps, generic.cop_forecast, "COP forecast", color, unit="COP"))
+        return charts
     return None

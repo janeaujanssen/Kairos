@@ -81,8 +81,8 @@ components:
       type: object
       required:
         - timestamp
-        - time_step_duration_hours
-        - horizon_hours
+        - time_step_duration
+        - planning_horizon
         - grid
         - base_load
         - storage
@@ -92,17 +92,17 @@ components:
           format: date-time
           example: "2026-09-30T14:00:05+02:00"
           description: ISO 8601 timestamp marking the start of the optimization period.
-        time_step_duration_hours:
+        time_step_duration:
           type: number
           format: float
           example: 0.25
           description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
-        horizon_hours:
+        planning_horizon:
           type: number
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
-        time_limit_s:
+        solver_time_limit:
           type: integer
           default: 10
           minimum: 1
@@ -115,7 +115,7 @@ components:
           minimum: 0.0
           maximum: 1.0
           description: Relative MIP gap fraction. Set to 0 to require CBC's optimality proof.
-        switching_penalty:
+        storage_switching_penalty:
           type: number
           format: float
           default: 0.1
@@ -133,7 +133,7 @@ components:
             Set to 0 to disable.
         grid:
           $ref: '#/components/schemas/Grid'
-        pv:
+        solar:
           type: array
           items:
             $ref: '#/components/schemas/PV'
@@ -163,10 +163,10 @@ components:
       required:
         - id
         - name
-        - max_import_power
-        - max_export_power
-        - import_price_forecast
-        - export_price_forecast
+        - max_grid_import_power
+        - max_grid_export_power
+        - grid_import_price_forecast
+        - grid_export_price_forecast
       properties:
         id:
           type: string
@@ -174,20 +174,20 @@ components:
         name:
           type: string
           example: "Main Grid Connection"
-        max_import_power:
+        max_grid_import_power:
           type: number
           description: Max import power constraint [W].
           example: 11000.0
-        max_export_power:
+        max_grid_export_power:
           type: number
           description: Max export power constraint [W].
           example: 11000.0
-        import_price_forecast:
+        grid_import_price_forecast:
           type: array
           description: Import price forecast [price/Wh] per time step. Array has one entry per time step; each entry represents the average price for the period starting at that time step.
           items:
             type: number
-        export_price_forecast:
+        grid_export_price_forecast:
           type: array
           description: Export price forecast [price/Wh] per time step. Array has one entry per time step; each entry represents the average price for the period starting at that time step.
           items:
@@ -254,7 +254,7 @@ components:
           type: number
           description: Total energy demand [Wh].
           example: 1800.0
-        run_started_at:
+        run_start_time:
           type: string
           format: date-time
           description: >-
@@ -456,11 +456,11 @@ components:
         - min_comfort_temperature
         - heat_loss_coefficient
         - heat_pump_electric_power
-        - heat_pump_cop
+        - heat_pump_coefficient_of_performance
         - morning_peak_energy_demand
         - evening_peak_energy_demand
-        - morning_peak_time
-        - evening_peak_time
+        - morning_demand_peak_time
+        - evening_demand_peak_time
       properties:
         id:
           type: string
@@ -481,7 +481,7 @@ components:
         min_water_temperature:
           type: number
           example: 20.0
-          description: Minimum safe water temperature [°C].
+          description: Ambient temperature around the tank [°C]. Sets the bottom of the state of charge scale and, together with max_water_temperature, the range used for passive discharge power.
         max_water_temperature:
           type: number
           example: 60.0
@@ -502,7 +502,7 @@ components:
           type: number
           example: 3000.0
           description: Heat pump electric power [W].
-        heat_pump_cop:
+        heat_pump_coefficient_of_performance:
           type: number
           example: 3.0
           description: Heat pump coefficient of performance (COP) [-].
@@ -514,12 +514,12 @@ components:
           type: number
           example: 180.0
           description: Typical evening peak DHW energy demand [Wh].
-        morning_peak_time:
+        morning_demand_peak_time:
           type: string
           format: time
           example: "07:00"
           description: Time of morning peak demand [HH:MM].
-        evening_peak_time:
+        evening_demand_peak_time:
           type: string
           format: time
           example: "19:00"
@@ -536,13 +536,19 @@ components:
         - thermal_mass_coefficient
         - min_room_temperature
         - max_room_temperature
-        - current_indoor_temperature
+        - indoor_temperature
         - min_comfort_temperature
         - max_comfort_temperature
         - heating_rate
         - cooldown_rate
-        - heat_pump_cop_charge
-        - heat_pump_cop_default
+        - heat_loss_coefficient
+        - outdoor_temperature_forecast
+        - reference_cop
+        - reference_outdoor_temperature
+        - cop_outdoor_temperature_coefficient
+        - plus_dt_flow_offset
+        - minus_dt_flow_offset
+        - cop_flow_temperature_sensitivity
       properties:
         id:
           type: string
@@ -558,7 +564,7 @@ components:
           example: "building_thermal_mass"
         floor_area:
           type: number
-          example: 100.0
+          example: 400.0
           description: Building floor area [m²].
         thermal_mass_coefficient:
           type: number
@@ -572,42 +578,66 @@ components:
           type: number
           example: 23.0
           description: Physical maximum room temperature, maps to SoC 1 [°C].
-        current_indoor_temperature:
+        indoor_temperature:
           type: number
           example: 20.5
           description: Current indoor temperature [°C].
         min_comfort_temperature:
           type: number
-          example: 19.0
+          example: 20.0
           description: Minimum comfort temperature, lower SoC limit [°C].
         max_comfort_temperature:
           type: number
-          example: 21.0
+          example: 22.0
           description: Maximum comfort temperature [°C].
         heating_rate:
           type: number
-          example: 0.6
+          example: 0.03
           description: Heating rate when heat pump set to +dT mode [°C/hour].
         cooldown_rate:
           type: number
-          example: 0.1
-          description: Cooldown rate when heat pump set to -dT mode [°C/hour].
-        heat_pump_cop_charge:
+          example: -0.03
+          description: Cooldown rate when heat pump set to -dT mode [°C/hour], entered as a negative value.
+        heat_loss_coefficient:
           type: number
-          example: 2.5
-          description: Heat pump COP for charging (+dT mode) [-].
-        heat_pump_cop_default:
+          example: 430.0
+          description: Heat loss coefficient to outdoors [W/°C]. Passive loss per step is this value times (indoor temperature - outdoor temperature).
+        outdoor_temperature_forecast:
+          type: array
+          description: Forecast outdoor temperature [°C] per time step. Must have one entry per time step.
+          items:
+            type: number
+        reference_cop:
           type: number
           example: 3.0
-          description: Heat pump COP for default weather compensation mode [-].
-
+          description: Heat pump COP at the reference outdoor temperature [-].
+        reference_outdoor_temperature:
+          type: number
+          example: 7.0
+          description: Outdoor temperature at which reference_cop applies [°C].
+        cop_outdoor_temperature_coefficient:
+          type: number
+          example: 0.1
+          description: Change of COP per degree of outdoor temperature [COP/°C].
+        plus_dt_flow_offset:
+          type: number
+          example: 5.0
+          description: Flow temperature offset in +dT mode [°C].
+        minus_dt_flow_offset:
+          type: number
+          example: -5.0
+          description: Flow temperature offset in -dT mode [°C].
+        cop_flow_temperature_sensitivity:
+          type: number
+          example: -0.02
+          description: Change of COP per degree of flow temperature offset, applied as COP × (1 + sensitivity × ΔT) [-/°C]. Negative values mean COP drops as flow temperature rises.
     # --- RESPONSE ---
     OptimizationResponse:
       type: object
       required:
         - status
         - objective_cost
-        - time_step_minutes
+        - schedule_time_step
         - assets
       properties:
         status:
@@ -627,7 +657,7 @@ components:
           type: number
           description: Evaluated full objective optimized by CBC, including penalties and tie-breaker terms.
           example: 1.24
-        time_step_minutes:
+        schedule_time_step:
           type: number
           description: Duration of each scheduled interval in minutes.
           example: 15
@@ -672,11 +702,11 @@ components:
     AssetSchedule:
       type: object
       required:
-        - setpoint
+        - power_setpoint
         - unit
         - schedule
       properties:
-        setpoint:
+        power_setpoint:
           type: number
           description: Power setpoint for the first time step [W], equal to the first schedule value.
           example: 2500.0
@@ -694,6 +724,19 @@ components:
           description: Storage SoC normalized from 0.0 (empty) to 1.0 (full), with one point per interval timestamped at each interval end. The current SoC is not included.
           items:
             $ref: '#/components/schemas/SchedulePoint'
+        mode:
+          type: array
+          description: Building thermal mass only. Operating mode per time step, timestamped at each interval start. "charge" (+dT), "discharge" (-dT), or "neutral".
+          items:
+            type: object
+            required: [time, value]
+            properties:
+              time:
+                type: string
+                format: date-time
+              value:
+                type: string
+                enum: [charge, discharge, neutral]
 
     SchedulePoint:
       type: object
@@ -726,8 +769,8 @@ components:
       type: object
       required:
         - timestamp
-        - time_step_duration_hours
-        - horizon_hours
+        - time_step_duration
+        - planning_horizon
         - grid
         - base_load
         - storage
@@ -737,17 +780,17 @@ components:
           format: date-time
           example: "2026-09-30T14:00:05+02:00"
           description: ISO 8601 timestamp marking the start of the optimization period.
-        time_step_duration_hours:
+        time_step_duration:
           type: number
           format: float
           example: 0.25
           description: Duration of each time step in hours (e.g., 0.25 for 15-minute intervals).
-        horizon_hours:
+        planning_horizon:
           type: number
           format: float
           example: 24
           description: Planning horizon duration in hours (e.g., 24 for a day-ahead optimization).
-        time_limit_s:
+        solver_time_limit:
           type: integer
           default: 10
           minimum: 1
@@ -760,7 +803,7 @@ components:
           minimum: 0.0
           maximum: 1.0
           description: Relative MIP gap fraction. Set to 0 to require CBC's optimality proof.
-        switching_penalty:
+        storage_switching_penalty:
           type: number
           format: float
           default: 0.1
@@ -778,7 +821,7 @@ components:
             Set to 0 to disable.
         grid:
           $ref: '#/components/schemas/Grid'
-        pv:
+        solar:
           type: array
           items:
             $ref: '#/components/schemas/PV'
@@ -995,7 +1038,10 @@ components:
         - availability_window
         - charge_power
         - discharge_power
-        - default_efficiency
+        - cop_forecast
+        - plus_dt_flow_offset
+        - minus_dt_flow_offset
+        - cop_flow_temperature_sensitivity
       properties:
         id:
           type: string
@@ -1007,8 +1053,8 @@ components:
           description: Name of the storage asset.
         storage_type:
           type: string
-          enum: [btm]
-          example: "btm"
+          enum: [building_thermal_mass]
+          example: "building_thermal_mass"
           description: Storage class type (Building Thermal Mass).
         current_soc:
           type: number
@@ -1041,9 +1087,13 @@ components:
           example: 1.0
           description: Discharge efficiency (thermal to thermal) [-].
         passive_discharge_power:
-          type: number
-          example: 0.0
-          description: Passive standby losses [W]. Not relevant for Building Thermal Mass.
+          oneOf:
+            - type: number
+            - type: array
+              items:
+                type: number
+          example: 2325.0
+          description: Passive thermal losses [W]. A single value applies to all steps; an array gives one value per step (heat_loss_coefficient × (indoor − outdoor)).
         discharge_to_electrical_network:
           type: boolean
           example: false
@@ -1061,13 +1111,26 @@ components:
             enum: [0, 1]
         charge_power:
           type: number
-          description: Discrete charging power (electric power in +dT mode) [W]. Not a maximum, but the actual power used when charging.
+          description: Discrete thermal charging power (+dT mode) [W]. Not a maximum, but the actual thermal power used when charging.
           example: 4800.0
         discharge_power:
           type: number
           description: Discrete discharging thermal power (-dT mode) [W]. Not a maximum, but the actual thermal power used when discharging.
           example: 2000.0
-        default_efficiency:
+        cop_forecast:
+          type: array
+          description: Heat pump COP [-] per time step. Electric power = charge_power / COP at the flow-adjusted COP.
+          items:
+            type: number
+        plus_dt_flow_offset:
           type: number
-          example: 3.0
-          description: Default efficiency (Heat pump COP in default weather compensation mode) [-].
+          example: 5.0
+          description: Flow temperature offset in +dT mode [°C].
+        minus_dt_flow_offset:
+          type: number
+          example: -5.0
+          description: Flow temperature offset in -dT mode [°C].
+        cop_flow_temperature_sensitivity:
+          type: number
+          example: -0.02
+          description: Change of COP per degree of flow temperature offset, applied as COP × (1 + sensitivity × ΔT) [-/°C]. Negative values mean COP drops as flow temperature rises.

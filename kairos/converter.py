@@ -77,10 +77,10 @@ def convert_grid(data: dict[str, Any]) -> Grid:
     return Grid(
         id=data["id"],
         name=data["name"],
-        max_import_power=data["max_import_power"],
-        max_export_power=data["max_export_power"],
-        import_price_forecast=data["import_price_forecast"],
-        export_price_forecast=data["export_price_forecast"],
+        max_import_power=data["max_grid_import_power"],
+        max_export_power=data["max_grid_export_power"],
+        import_price_forecast=data["grid_import_price_forecast"],
+        export_price_forecast=data["grid_export_price_forecast"],
     )
 
 
@@ -126,7 +126,7 @@ def convert_controllable_load(data: dict[str, Any], start: datetime) -> Controll
         name=data["name"],
         average_power=data["average_power"],
         energy_demand=data["energy_demand"],
-        run_started_at=_parse_optional_dt(data.get("run_started_at")),
+        run_started_at=_parse_optional_dt(data.get("run_start_time")),
         earliest_start_time=earliest,
         latest_finish_time=latest,
     )
@@ -165,7 +165,10 @@ def convert_generic_storage(data: dict[str, Any]) -> Storage:
             **general,
             charge_power=data["charge_power"],
             discharge_power=data["discharge_power"],
-            default_efficiency=data["default_efficiency"],
+            cop_forecast=data["cop_forecast"],
+            plus_dt=data["plus_dt_flow_offset"],
+            minus_dt=data["minus_dt_flow_offset"],
+            cop_flow_sensitivity=data["cop_flow_temperature_sensitivity"],
         )
     raise ValueError(f"Unknown generic storage_type: {storage_type!r}")
 
@@ -251,8 +254,8 @@ def convert_dhw_tank(
 
     demand = [0.0] * n_steps
     for peak, energy in (
-        ("morning_peak_time", data["morning_peak_energy_demand"]),
-        ("evening_peak_time", data["evening_peak_energy_demand"]),
+        ("morning_demand_peak_time", data["morning_peak_energy_demand"]),
+        ("evening_demand_peak_time", data["evening_peak_energy_demand"]),
     ):
         for event in _daily_events(start, _parse_time(data[peak]), n_steps, step_hours):
             demand[_step_index(event, start, step_hours)] += energy
@@ -264,7 +267,7 @@ def convert_dhw_tank(
         energy_capacity=data["tank_volume"] * WATER_SPECIFIC_HEAT * span,
         max_soc=1.0,
         min_soc=(data["min_comfort_temperature"] - t_min) / span,
-        charge_efficiency=data["heat_pump_cop"],
+        charge_efficiency=data["heat_pump_coefficient_of_performance"],
         discharge_efficiency=1.0,
         passive_discharge_power=data["heat_loss_coefficient"] * span,
         discharge_to_electrical_network=False,
@@ -275,28 +278,41 @@ def convert_dhw_tank(
 
 
 def convert_building_thermal_mass(data: dict[str, Any], n_steps: int) -> BTM:
-    """Building thermal mass: room range to SoC and energy, comfort band to SoC limits, rates to discrete powers."""
+    """Building thermal mass: room range to SoC and energy, comfort band to SoC limits, rates to discrete thermal powers."""
     t_min = data["min_room_temperature"]
     span = data["max_room_temperature"] - t_min
     thermal_per_degree = data["floor_area"] * data["thermal_mass_coefficient"]  # Wh/°C
+    outdoor = data["outdoor_temperature_forecast"]
+    if data["cooldown_rate"] > 0:
+        raise ValueError("cooldown_rate must be negative (-dT mode)")
+    if len(outdoor) != n_steps:
+        raise ValueError(f"outdoor_temperature_forecast must have {n_steps} entries, got {len(outdoor)}")
+    indoor = data["indoor_temperature"]
+    cop_coefficient = data["cop_outdoor_temperature_coefficient"]
+    reference_cop = data["reference_cop"]
+    reference_outdoor = data["reference_outdoor_temperature"]
 
     return BTM(
         id=data["id"],
         name=data["name"],
-        current_soc=(data["current_indoor_temperature"] - t_min) / span,
+        current_soc=(indoor - t_min) / span,
         energy_capacity=thermal_per_degree * span,
         max_soc=(data["max_comfort_temperature"] - t_min) / span,
         min_soc=(data["min_comfort_temperature"] - t_min) / span,
-        charge_efficiency=data["heat_pump_cop_charge"],
+        charge_efficiency=0.0,  # COP model is used instead
         discharge_efficiency=1.0,
-        passive_discharge_power=0.0,
+        passive_discharge_power=[data["heat_loss_coefficient"] * (indoor - o) for o in outdoor],
         discharge_to_electrical_network=False,
         energy_demand_forecast=[0.0] * n_steps,
         availability_window=[1] * n_steps,
-        charge_power=thermal_per_degree * data["heating_rate"] / data["heat_pump_cop_charge"],
-        discharge_power=thermal_per_degree * data["cooldown_rate"],
-        default_efficiency=data["heat_pump_cop_default"],
+        charge_power=thermal_per_degree * data["heating_rate"],
+        discharge_power=-thermal_per_degree * data["cooldown_rate"],
+        cop_forecast=[reference_cop + cop_coefficient * (o - reference_outdoor) for o in outdoor],
+        plus_dt=data["plus_dt_flow_offset"],
+        minus_dt=data["minus_dt_flow_offset"],
+        cop_flow_sensitivity=data["cop_flow_temperature_sensitivity"],
     )
+
 
 
 def convert_storage(
@@ -318,6 +334,6 @@ def convert_storage(
 def convert_request_storage(request: dict[str, Any]) -> list[Storage]:
     """Convert all storage entries of an `/optimize` request."""
     start = _parse_dt(request["timestamp"])
-    step_hours = request["time_step_duration_hours"]
-    n_steps = round(request["horizon_hours"] / step_hours)
+    step_hours = request["time_step_duration"]
+    n_steps = round(request["planning_horizon"] / step_hours)
     return [convert_storage(s, start, step_hours, n_steps) for s in request["storage"]]

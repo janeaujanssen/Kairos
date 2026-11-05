@@ -3,8 +3,8 @@
 The module follows the structure of the architecture document:
 
 1. Decision variables    - "High Level Process": power setpoints of all controllable assets
-2. Objective             - "Optimization Objective": cost, BTM discharge benefit,
-                           end-of-horizon value, secondary objectives
+2. Objective             - "Optimization Objective": cost, end-of-horizon value,
+                           secondary objectives
 3. Constraints           - "Optimizer Constraints": energy balance (+ per-asset constraints)
 4. optimize()            - ties the above together and solves the MILP with CBC/PuLP
 
@@ -110,7 +110,6 @@ class StorageFlows:
     setpoint: list[Expr]  # power setpoint reported in the schedule [W]
     c_t: dict[int, pulp.LpVariable]  # charge mode binary per step
     d_t: dict[int, pulp.LpVariable]  # discharge mode binary per step
-    discharged_energy: list[Expr] | None = None  # BTM only, for the discharge benefit [Wh]
 
 
 @dataclass
@@ -121,7 +120,6 @@ class StorageModel:
     flows: StorageFlows
     remaining_energy: pulp.LpVariable  # stored energy at the end of the horizon [Wh]
     eta_value: float  # grid Wh that one stored Wh is worth at the end of the horizon
-    discharge_benefit: Expr = 0.0  # BTM only: avoided cost of discharging
     stored_energy_per_step: list[pulp.LpVariable] = None  # stored energy [Wh] at end of each step
     soc_violation_cost: Expr = 0.0
 
@@ -192,10 +190,11 @@ def add_battery(
         prob += charge[t] >= MIN_STORAGE_MODE_POWER * c_t[t]
         prob += discharge[t] <= s.max_discharge_power * avail[t] * d_t[t]
         prob += discharge[t] >= MIN_STORAGE_MODE_POWER * d_t[t]
-    electrical = [charge[t] - discharge[t] for t in steps]
+    # Discharge reaches the network scaled by eta; the stored energy drops by the full discharge.
+    electrical = [charge[t] - s.discharge_efficiency * discharge[t] for t in steps]
     return StorageFlows(
         gain=[charge[t] * s.charge_efficiency * dt for t in steps],
-        loss=[discharge[t] * dt / s.discharge_efficiency for t in steps],
+        loss=[discharge[t] * dt for t in steps],
         electrical_power=electrical,
         setpoint=electrical,
         c_t=c_t,
@@ -227,23 +226,44 @@ def add_dhw(
 def add_btm(
     prob: pulp.LpProblem, s: BTM, idx: int, avail: list[int], dt: float, n_steps: int
 ) -> StorageFlows:
-    """Three modes per step: +dT (charge), -dT (discharge), neutral. Only +dT draws extra power."""
+    """Three modes per step: +dT (charge), -dT (discharge), neutral. Electric power is the full heat pump power."""
     steps = range(n_steps)
+    _check_len(f"{s.id} cop_forecast", s.cop_forecast, n_steps)
+    passive = s.passive_discharge_power
+    if not isinstance(passive, list):
+        passive = [passive] * n_steps
+    _check_len(f"{s.id} passive_discharge_power", passive, n_steps)
     c_t = pulp.LpVariable.dicts(f"s{idx}_c", steps, cat=pulp.LpBinary)  # +dT charge mode
     d_t = pulp.LpVariable.dicts(f"s{idx}_d", steps, cat=pulp.LpBinary)  # -dT discharge mode
+    cop_plus = [cop * (1 + s.cop_flow_sensitivity * s.plus_dt) for cop in s.cop_forecast]
+    cop_minus = [cop * (1 + s.cop_flow_sensitivity * s.minus_dt) for cop in s.cop_forecast]
     for t in steps:
         prob += c_t[t] + d_t[t] <= avail[t]
         prob += s.charge_power * c_t[t] >= MIN_STORAGE_MODE_POWER * c_t[t]
         prob += s.discharge_power * d_t[t] >= MIN_STORAGE_MODE_POWER * d_t[t]
+    # Heat pump thermal output per mode: +dT = passive loss + charge, neutral = passive loss,
+    # -dT = passive loss minus cooldown (off if negative). It is the BTM gain in the SoC balance.
+    heat_pump_thermal = [
+        c_t[t] * (passive[t] + s.charge_power)
+        + (1 - c_t[t] - d_t[t]) * passive[t]
+        + d_t[t] * max(0.0, passive[t] - s.discharge_power)
+        for t in steps
+    ]
+    heat_pump_electrical = [
+        c_t[t] * (passive[t] + s.charge_power) / cop_plus[t]
+        + (1 - c_t[t] - d_t[t]) * passive[t] / s.cop_forecast[t]
+        + d_t[t] * max(0.0, passive[t] - s.discharge_power) / cop_minus[t]
+        for t in steps
+    ]
     return StorageFlows(
-        gain=[s.charge_power * s.charge_efficiency * dt * c_t[t] for t in steps],
-        loss=[s.discharge_power * dt / s.discharge_efficiency * d_t[t] for t in steps],
-        electrical_power=[s.charge_power * c_t[t] for t in steps],
-        setpoint=[s.charge_power * c_t[t] - s.discharge_power * d_t[t] for t in steps],
+        gain=[dt * heat_pump_thermal[t] for t in steps],
+        loss=[0.0] * n_steps,
+        electrical_power=heat_pump_electrical,
+        setpoint=heat_pump_electrical,
         c_t=c_t,
         d_t=d_t,
-        discharged_energy=[s.discharge_power * dt * d_t[t] for t in steps],
     )
+
 
 
 def add_storage(
@@ -252,7 +272,6 @@ def add_storage(
     idx: int,
     dt: float,
     n_steps: int,
-    import_price: list[float],
     soc_violation_penalty_per_wh: float,
 ) -> StorageModel:
     """Class-specific flows from the add_* functions, shared state-of-charge dynamics here."""
@@ -262,7 +281,6 @@ def add_storage(
     _check_len(f"{s.id} energy_demand_forecast", demand, n_steps)
     _check_len(f"{s.id} availability_window", avail, n_steps)
 
-    discharge_benefit: Expr = 0.0
     if isinstance(s, Battery):
         flows = add_battery(prob, s, idx, avail, dt, n_steps)
         eta_value = s.discharge_efficiency
@@ -271,21 +289,27 @@ def add_storage(
         eta_value = s.discharge_efficiency / s.charge_efficiency
     elif isinstance(s, BTM):
         flows = add_btm(prob, s, idx, avail, dt, n_steps)
-        eta_value = s.discharge_efficiency / s.default_efficiency
-        discharge_benefit = building_thermal_discharge_benefit(
-            s, flows.discharged_energy, import_price
-        )
+        eta_value = s.discharge_efficiency / (sum(s.cop_forecast) / n_steps)
     else:
         raise TypeError(f"Unsupported storage type: {type(s).__name__}")
 
-    # energy[t+1] = energy[t] + charged - discharged - demand - passive loss
+    passive = s.passive_discharge_power
+    if not isinstance(passive, list):
+        passive = [passive] * n_steps
+    _check_len(f"{s.id} passive_discharge_power", passive, n_steps)
+
+    # energy[t+1] = energy[t] + charged - discharged - demand / eta_discharge - passive loss
     energy = pulp.LpVariable.dicts(f"s{idx}_energy", range(n_steps + 1), 0, s.energy_capacity)
     below_min = pulp.LpVariable.dicts(f"s{idx}_soc_below_min", steps, 0)
     above_max = pulp.LpVariable.dicts(f"s{idx}_soc_above_max", steps, 0)
     prob += energy[0] == s.current_soc * s.energy_capacity
     for t in steps:
         prob += energy[t + 1] == (
-            energy[t] + flows.gain[t] - flows.loss[t] - demand[t] - s.passive_discharge_power * dt
+            energy[t]
+            + flows.gain[t]
+            - flows.loss[t]
+            - demand[t] / s.discharge_efficiency
+            - passive[t] * dt
         )
         prob += energy[t + 1] + below_min[t] >= s.min_soc * s.energy_capacity
         prob += energy[t + 1] - above_max[t] <= s.max_soc * s.energy_capacity
@@ -299,7 +323,6 @@ def add_storage(
         flows,
         energy[n_steps],
         eta_value,
-        discharge_benefit,
         stored_energy_per_step,
         soc_violation_cost,
     )
@@ -318,17 +341,18 @@ def energy_cost(model: GridModel, dt: float) -> Expr:
     )
 
 
-def building_thermal_discharge_benefit(
-    s: BTM, discharged_energy: list[Expr], import_price: list[float]
-) -> Expr:
-    """Discharged energy * (eta_discharge / eta_default) * import price, summed over t."""
-    factor = s.discharge_efficiency / s.default_efficiency
-    return pulp.lpSum(e * factor * p for e, p in zip(discharged_energy, import_price))
-
-
 def remaining_storage_value(models: list[StorageModel], future_price: float) -> Expr:
     """Remaining stored energy * eta_value * future import price."""
     return pulp.lpSum(m.remaining_energy * m.eta_value * future_price for m in models)
+
+
+def _btm_mode(c: pulp.LpVariable, d: pulp.LpVariable) -> str:
+    """Heat pump mode from the solved +dT/-dT binaries."""
+    if pulp.value(c) > 0.5:
+        return "charge"
+    if pulp.value(d) > 0.5:
+        return "discharge"
+    return "neutral"
 
 
 def _terminal_storage_price(import_prices: list[float]) -> float:
@@ -445,7 +469,6 @@ def optimize(
             i,
             dt,
             n_steps,
-            grid.import_price_forecast,
             soc_violation_penalty_per_wh
             * (DHW_SOC_VIOLATION_PENALTY_MULTIPLIER if isinstance(s, DHW) else 1.0),
         )
@@ -468,12 +491,11 @@ def optimize(
         prob, grid_model, pv_power, base_load_power, controllable_power, storage_power
     )
 
-    # Objective: cost - BTM discharge benefit - remaining storage value, switching penalty, plus tie-breaker.
+    # Objective: cost - remaining storage value, switching penalty, plus tie-breaker.
     average_import_price = sum(grid.import_price_forecast) / n_steps
     terminal_storage_price = _terminal_storage_price(grid.import_price_forecast)
     cost = (
         energy_cost(grid_model, dt)
-        - pulp.lpSum(m.discharge_benefit for m in storage_models)
         - remaining_storage_value(storage_models, terminal_storage_price)
         + pulp.lpSum(m.soc_violation_cost for m in storage_models)
         + storage_mode_switching_penalty(prob, storage_models, n_steps, switching_penalty)
@@ -514,7 +536,7 @@ def optimize(
             for i, value in enumerate(float(pulp.value(value)) for value in values)
         ]
         assets[asset_id] = {
-            "setpoint": power_schedule[0]["value"],
+            "power_setpoint": power_schedule[0]["value"],
             "unit": "W",
             "schedule": power_schedule,
         }
@@ -527,6 +549,14 @@ def optimize(
             }
             for i, energy in enumerate(model.stored_energy_per_step[1:])
         ]
+        if isinstance(model.storage, BTM):
+            assets[model.storage.id]["mode"] = [
+                {
+                    "time": (start + timedelta(hours=i * step_hours)).isoformat(),
+                    "value": _btm_mode(model.flows.c_t[i], model.flows.d_t[i]),
+                }
+                for i in range(n_steps)
+            ]
 
     return OptimizationResult(
         status="Optimal" if prob.sol_status == pulp.LpSolutionOptimal else "Feasible",

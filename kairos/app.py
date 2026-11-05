@@ -22,7 +22,7 @@ st.set_page_config(page_title="Kairos - Easy, optimized energy scheduling for Ho
 
 # ---------------------------------------------------------------------------
 # Asset definitions: (key, label, default, kind[, number format])
-# kinds: num (>= 0, step 1), num_hundredth (>= 0, step 0.01), frac (0-1), temp (any sign), time
+# kinds: num (>= 0, step 1), num_hundredth (>= 0, step 0.01), signed_hundredth (any sign, step 0.01), frac (0-1), temp (any sign), time
 # ---------------------------------------------------------------------------
 ASSET_TYPES = {
     "grid": {"icon": "⚡", "label": "Grid", "single": True},
@@ -47,8 +47,8 @@ _BATTERY_COMMON = [
 
 PHYSICAL_FIELDS = {
     "grid": [
-        ("max_import_power", "Max import power [W]", 11000.0, "num"),
-        ("max_export_power", "Max export power [W]", 11000.0, "num"),
+        ("max_grid_import_power", "Max import power [W]", 11000.0, "num"),
+        ("max_grid_export_power", "Max export power [W]", 11000.0, "num"),
     ],
     "pv": [],
     "base_load": [],
@@ -57,7 +57,7 @@ PHYSICAL_FIELDS = {
         ("runtime_h", "Runtime [h]", 1.2, "num", "%.2f"),
         ("earliest_start_time", "Earliest start time", time(0, 0), "time"),
         ("latest_finish_time", "Latest finish time", time(12, 0), "time"),
-        ("run_started_at", "Run already started", None, "optional_datetime"),
+        ("run_start_time", "Run already started", None, "optional_datetime"),
     ],
     "home_battery": [
         ("energy_capacity", "Energy capacity [Wh]", 10000.0, "num"),
@@ -79,20 +79,20 @@ PHYSICAL_FIELDS = {
         ("min_comfort_temperature", "Min comfort temperature [°C]", 40.0, "temp"),
         ("heat_loss_coefficient", "Heat loss coefficient [W/°C]", 4.0, "num"),
         ("heat_pump_electric_power", "Heat pump electric power [W]", 3000.0, "num"),
-        ("heat_pump_cop", "Heat pump COP [-]", 3.0, "num"),
+        ("heat_pump_coefficient_of_performance", "Heat pump COP [-]", 3.0, "num"),
     ],
     "building_thermal_mass": [
-        ("floor_area", "Floor area [m²]", 100.0, "num"),
+        ("floor_area", "Floor area [m²]", 400.0, "num"),
         ("thermal_mass_coefficient", "Thermal mass coefficient [Wh/m²/°C]", 200.0, "num"),
         ("min_room_temperature", "Min room temperature [°C]", 15.0, "temp"),
         ("max_room_temperature", "Max room temperature [°C]", 23.0, "temp"),
-        ("current_indoor_temperature", "Current indoor temperature [°C]", 20.5, "temp"),
-        ("min_comfort_temperature", "Min comfort temperature [°C]", 19.0, "temp"),
-        ("max_comfort_temperature", "Max comfort temperature [°C]", 21.0, "temp"),
-        ("heating_rate", "Heating rate (+dT) [°C/h]", 0.1, "num_hundredth"),
-        ("cooldown_rate", "Cooldown rate (-dT) [°C/h]", 0.1, "num_hundredth"),
-        ("heat_pump_cop_charge", "Heat pump COP, +dT mode [-]", 2.5, "num"),
-        ("heat_pump_cop_default", "Heat pump COP, default mode [-]", 3.0, "num"),
+        ("min_comfort_temperature", "Min comfort temperature [°C]", 20.0, "temp"),
+        ("max_comfort_temperature", "Max comfort temperature [°C]", 22.0, "temp"),
+        ("heating_rate", "Heating rate (+dT) [°C/h]", 0.03, "num_hundredth"),
+        ("cooldown_rate", "Cooldown rate (-dT) [°C/h]", -0.03, "signed_hundredth"),
+        ("plus_dt_flow_offset", "Flow temperature offset, +dT [°C]", 5.0, "num"),
+        ("minus_dt_flow_offset", "Flow temperature offset, -dT [°C]", -5.0, "temp"),
+        ("cop_flow_temperature_sensitivity", "COP change per flow °C [-/°C]", -0.02, "signed_hundredth"),
     ],
 }
 
@@ -122,8 +122,17 @@ FORECAST_FIELDS = {
     "dhw_tank": [
         ("morning_peak_energy_demand", "Morning peak energy demand [Wh]", 1500.0, "num"),
         ("evening_peak_energy_demand", "Evening peak energy demand [Wh]", 1800.0, "num"),
-        ("morning_peak_time", "Morning peak time", time(7, 0), "time"),
-        ("evening_peak_time", "Evening peak time", time(19, 0), "time"),
+        ("morning_demand_peak_time", "Morning peak time", time(7, 0), "time"),
+        ("evening_demand_peak_time", "Evening peak time", time(19, 0), "time"),
+    ],
+    "building_thermal_mass": [
+        ("min_outdoor_temperature", "Min outdoor temperature (midnight) [°C]", 3.0, "temp"),
+        ("max_outdoor_temperature", "Max outdoor temperature (noon) [°C]", 11.0, "temp"),
+        ("indoor_temperature", "Current indoor temperature [°C]", 20.5, "temp"),
+        ("heat_loss_coefficient", "Heat loss coefficient [W/°C]", 430.0, "num"),
+        ("reference_cop", "Reference COP [-]", 3.0, "num"),
+        ("reference_outdoor_temperature", "Reference outdoor temperature [°C]", 7.0, "temp"),
+        ("cop_outdoor_temperature_coefficient", "COP change per outdoor °C [COP/°C]", 0.1, "num_hundredth"),
     ],
 }
 
@@ -170,7 +179,7 @@ def render_fields(asset_id: str, fields: list[tuple]) -> dict:
                 label,
                 min_value=0.0 if kind in {"num", "num_hundredth"} else None,
                 value=float(default),
-                step=0.001 if fmt else 0.01 if kind == "num_hundredth" else 1.0,
+                step=0.001 if fmt else 0.01 if kind in {"num_hundredth", "signed_hundredth"} else 1.0,
                 format=fmt[0] if fmt else None,
                 key=wkey,
             )
@@ -214,11 +223,11 @@ with st.sidebar:
 
         st.subheader("Configuration")
         horizon_h = st.number_input("Planning horizon [h]", 6, 48, 24, step=1)
-        interval_min = st.selectbox("Time interval [min]", [15, 30, 60], index=0)
+        interval_min = st.selectbox("Schedule time step [min]", [15, 30, 60], index=0)
         start_time = st.time_input("Start time [hh:mm]", value=time(0, 0))
         time_limit_s = st.number_input("Solver time limit [s]", 1, 3600, 10, step=1)
         relative_mip_gap = st.number_input(
-            "Relative MIP gap [-]",
+            "Relative MIP gap",
             min_value=0.0,
             max_value=1.0,
             value=0.0,
@@ -227,7 +236,7 @@ with st.sidebar:
             help="Stop once the best schedule is within this relative gap of the best bound. Set to 0 to require CBC's optimality proof.",
         )
         switching_penalty = st.number_input(
-            "Switching penalty [currency units / mode change]",
+            "Storage switching penalty [cost per mode change]",
             min_value=0.0,
             value=0.010,
             step=0.001,
@@ -276,7 +285,7 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
             forecast["evening_peak_price"] / 1000,
             forecast["export_fraction"],
         )
-        payload.update(import_price_forecast=imp, export_price_forecast=exp)
+        payload.update(grid_import_price_forecast=imp, grid_export_price_forecast=exp)
     elif t == "pv":
         payload["power_forecast"] = fs.pv_power_forecast(hours_of_day, forecast["peak_power"])
     elif t == "base_load":
@@ -285,8 +294,8 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
         payload["energy_demand"] = physical["average_power"] * payload.pop("runtime_h")
         payload["earliest_start_time"] = payload["earliest_start_time"].strftime("%H:%M")
         payload["latest_finish_time"] = payload["latest_finish_time"].strftime("%H:%M")
-        if payload["run_started_at"] is not None:
-            payload["run_started_at"] = payload["run_started_at"].isoformat()
+        if payload["run_start_time"] is not None:
+            payload["run_start_time"] = payload["run_start_time"].isoformat()
     elif t in STORAGE_TYPES:
         payload["storage_type"] = t
         for key, value in forecast.items():
@@ -299,6 +308,12 @@ def build_payload(asset: dict, physical: dict, forecast: dict) -> dict:
                 # Convert from km/kWh (display) to km/Wh (backend): divide by 1000
                 value = value / 1000
             payload[key] = value
+        if t == "building_thermal_mass":
+            payload["outdoor_temperature_forecast"] = fs.outdoor_temperature_forecast(
+                hours_of_day,
+                payload.pop("min_outdoor_temperature"),
+                payload.pop("max_outdoor_temperature"),
+            )
     return payload
 
 
@@ -355,9 +370,10 @@ def render_asset(asset: dict, color_index: int = 0) -> tuple[dict, object]:
         
         # Forecast chart full width below the columns
         if t in FORECAST_FIELDS:
-            fig = viz.forecast_chart(t, payload, generic, timestamps, forecast, color_index)
-            if fig is not None:
-                viz.show(fig)
+            figs = viz.forecast_chart(t, payload, generic, timestamps, forecast, color_index)
+            for fig in figs if isinstance(figs, list) else [figs]:
+                if fig is not None:
+                    viz.show(fig)
         
         # Remove button
         if st.button("Remove asset", key=f"{asset['id']}_remove"):
@@ -395,14 +411,14 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
     storage = [(a, p, g) for t in STORAGE_TYPES for a, p, g in by_type(t)]
     request = {
         "timestamp": start.isoformat(),
-        "time_step_duration_hours": step_h,
-        "horizon_hours": horizon_h,
-        "time_limit_s": time_limit_s,
+        "time_step_duration": step_h,
+        "planning_horizon": horizon_h,
+        "solver_time_limit": time_limit_s,
         "relative_mip_gap": relative_mip_gap,
-        "switching_penalty": switching_penalty,
+        "storage_switching_penalty": switching_penalty,
         "grid_peak_penalty": grid_peak_penalty,
         "grid": grid[0][1],
-        "pv": [p for _, p, _ in by_type("pv")],
+        "solar": [p for _, p, _ in by_type("pv")],
         "base_load": base_load[0][1],
         "controllable_loads": [p for _, p, _ in by_type("controllable_load")],
         "storage": [p for _, p, _ in storage],
@@ -429,9 +445,9 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
         "data": optimization_response,
         "solve_time": elapsed,
         "timestamps": result_timestamps,
-        "step_h": optimization_response["time_step_minutes"] / 60,
-        "import_price": grid[0][1]["import_price_forecast"],
-        "export_price": grid[0][1]["export_price_forecast"],
+        "step_h": optimization_response["schedule_time_step"] / 60,
+        "import_price": grid[0][1]["grid_import_price_forecast"],
+        "export_price": grid[0][1]["grid_export_price_forecast"],
         "base_load": base_load[0][1]["power_forecast"],
         "pv": pv_total,
         "grid_name": grid[0][0]["name"],
@@ -467,15 +483,15 @@ def refresh_latest_result() -> None:
     latest_request = latest["request"]
     latest_response = latest["response"]
     grid = latest_request["grid"]
-    result_step_hours = latest_response["time_step_minutes"] / 60
+    result_step_hours = latest_response["schedule_time_step"] / 60
     result_schedule = latest_response["assets"].get(grid["id"], {}).get("schedule", [])
     result_timestamps = [datetime.fromisoformat(point["time"]) for point in result_schedule]
     if not result_timestamps:
         fallback_start = datetime.fromisoformat(latest_request["timestamp"])
-        fallback_steps = round(latest_request["horizon_hours"] / result_step_hours)
+        fallback_steps = round(latest_request["planning_horizon"] / result_step_hours)
         result_timestamps = [fallback_start + timedelta(hours=i * result_step_hours) for i in range(fallback_steps)]
 
-    pv_forecasts = [asset["power_forecast"] for asset in latest_request.get("pv", [])]
+    pv_forecasts = [asset["power_forecast"] for asset in latest_request.get("solar", [])]
     pv_total = [sum(values) for values in zip(*pv_forecasts)] if pv_forecasts else []
     result_steps = len(result_timestamps)
     st.session_state.result = {
@@ -483,13 +499,13 @@ def refresh_latest_result() -> None:
         "solve_time": latest["solve_time_seconds"],
         "timestamps": result_timestamps,
         "step_h": result_step_hours,
-        "import_price": grid["import_price_forecast"],
-        "export_price": grid["export_price_forecast"],
+        "import_price": grid["grid_import_price_forecast"],
+        "export_price": grid["grid_export_price_forecast"],
         "base_load": latest_request["base_load"]["power_forecast"],
         "pv": pv_total or [0.0] * result_steps,
         "grid_name": grid["name"],
         "base_load_name": latest_request["base_load"]["name"],
-        "pv_name": ", ".join(p["name"] for p in latest_request.get("pv", [])) or "Solar Production",
+        "pv_name": ", ".join(p["name"] for p in latest_request.get("solar", [])) or "Solar Production",
         "grid_id": grid["id"],
         "controllable_ids": [item["id"] for item in latest_request.get("controllable_loads", [])],
         "storage_ids": [item["id"] for item in latest_request.get("storage", [])],
@@ -602,6 +618,11 @@ with tab_opt:
                 for asset_id, asset in assets.items()
                 if "soc_schedule" in asset
             }
+            modes = {
+                asset_id: [point["value"] for point in asset["mode"]]
+                for asset_id, asset in assets.items()
+                if "mode" in asset
+            }
             generics = result["generics"]
             net_grid = schedule[result["grid_id"]]
             soc_timestamps = next(
@@ -619,6 +640,7 @@ with tab_opt:
                 result["import_price"], result["export_price"], result["storage_types_by_id"],
                 result["controllable_ids"], names_by_id=result["names_by_id"],
                 base_load_name=result["base_load_name"], pv_name=result["pv_name"], grid_name=result["grid_name"],
+                modes_by_id=modes,
             ))
             st.subheader("Cost Analysis")
 

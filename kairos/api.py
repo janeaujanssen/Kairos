@@ -34,11 +34,11 @@ app.openapi = _load_openapi
 
 class OptimizationRequest(BaseModel):
     timestamp: datetime
-    time_step_duration_hours: float
-    horizon_hours: float
-    time_limit_s: int = Field(default=10, ge=1, le=3600)
+    time_step_duration: float
+    planning_horizon: float
+    solver_time_limit: int = Field(default=10, ge=1, le=3600)
     relative_mip_gap: float = Field(default=0.0, ge=0.0, le=1.0)
-    switching_penalty: float = Field(default=0.1, ge=0.0)
+    storage_switching_penalty: float = Field(default=0.1, ge=0.0)
     grid_peak_penalty: float = Field(
         default=0.1,
         ge=0.0,
@@ -49,7 +49,7 @@ class OptimizationRequest(BaseModel):
         ),
     )
     grid: dict[str, Any]
-    pv: list[dict[str, Any]] = []
+    solar: list[dict[str, Any]] = []
     base_load: dict[str, Any]
     controllable_loads: list[dict[str, Any]] = []
     storage: list[dict[str, Any]]
@@ -64,11 +64,17 @@ class SchedulePoint(BaseModel):
     value: float
 
 
+class ModeSchedulePoint(BaseModel):
+    time: datetime
+    value: str
+
+
 class AssetSchedule(BaseModel):
-    setpoint: float
+    power_setpoint: float
     unit: str
     schedule: list[SchedulePoint]
     soc_schedule: list[SchedulePoint] | None = None
+    mode: list[ModeSchedulePoint] | None = None
 
 
 class OptimizationResponse(BaseModel):
@@ -76,7 +82,7 @@ class OptimizationResponse(BaseModel):
     termination_reason: str | None = None
     relative_mip_gap: float = 0.0
     objective_cost: float
-    time_step_minutes: float
+    schedule_time_step: float
     assets: dict[str, AssetSchedule]
 
 
@@ -100,10 +106,10 @@ def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONRes
 
 def _run(request: OptimizationRequest, storage_converter) -> OptimizationResponse:
     started_at = perf_counter()
-    n_steps = round(request.horizon_hours / request.time_step_duration_hours)
+    n_steps = round(request.planning_horizon / request.time_step_duration)
     try:
         sources = [converter.convert_grid(request.grid)]
-        sources += [converter.convert_pv(p) for p in request.pv]
+        sources += [converter.convert_pv(p) for p in request.solar]
         loads = [converter.convert_base_load(request.base_load)]
         loads += [converter.convert_controllable_load(l, request.timestamp) for l in request.controllable_loads]
         storage = [storage_converter(s, n_steps) for s in request.storage]
@@ -112,11 +118,11 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
             loads=loads,
             storage=storage,
             start=request.timestamp,
-            step_hours=request.time_step_duration_hours,
+            step_hours=request.time_step_duration,
             n_steps=n_steps,
-            time_limit_s=request.time_limit_s,
+            time_limit_s=request.solver_time_limit,
             relative_mip_gap=request.relative_mip_gap,
-            switching_penalty=request.switching_penalty,
+            switching_penalty=request.storage_switching_penalty,
             grid_peak_penalty=request.grid_peak_penalty,
         )
     except KeyError as e:
@@ -129,7 +135,7 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         termination_reason=result.termination_reason,
         relative_mip_gap=result.relative_mip_gap,
         objective_cost=result.objective_cost,
-        time_step_minutes=result.time_step_minutes,
+        schedule_time_step=result.time_step_minutes,
         assets=result.assets,
     )
     app.state.latest_optimization = {
@@ -156,7 +162,7 @@ def run_optimization(request: OptimizationRequest) -> OptimizationResponse:
     return _run(
         request,
         lambda s, n: converter.convert_storage(
-            s, request.timestamp, request.time_step_duration_hours, n
+            s, request.timestamp, request.time_step_duration, n
         ),
     )
 
