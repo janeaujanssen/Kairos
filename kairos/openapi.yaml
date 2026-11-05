@@ -676,6 +676,7 @@ components:
               items:
                 $ref: '#/components/schemas/SchedulePoint'
 
+    LatestOptimizationRecord:
       type: object
       required:
         - request
