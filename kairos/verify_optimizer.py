@@ -67,6 +67,18 @@ crossing_run = optimizer.add_controllable_load(None, crossing_load, 0, run_start
 assert crossing_run == [1000.0, 0.0, 0.0, 0.0], "a run from an earlier day still in progress was interrupted"
 print("Started controllable loads run to completion without restarting: OK")
 
+today_load = ControllableLoad(
+    "today-load",
+    "Today load",
+    average_power=1000.0,
+    energy_demand=3000.0,
+    run_started_at=datetime(2026, 1, 1, 10, tzinfo=timezone.utc),
+)
+next_day_prob = pulp.LpProblem("next_day", pulp.LpMinimize)
+optimizer.add_controllable_load(next_day_prob, today_load, 0, datetime(2026, 1, 1, 12, tzinfo=timezone.utc), 1.0, 16)
+assert {v.name for v in next_day_prob.variables()} == {"load0_start_12", "load0_start_13"}, "a run done today was not blocked until midnight"
+print("A run done today is only rescheduled from the next day: OK")
+
 optimize = getattr(optimizer, "optimize", None)
 if optimize is None:
     raise AssertionError("optimize function is missing")

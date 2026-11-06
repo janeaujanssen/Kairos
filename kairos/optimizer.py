@@ -144,8 +144,10 @@ def add_grid(prob: pulp.LpProblem, grid: Grid, n_steps: int) -> GridModel:
 def add_controllable_load(
     prob: pulp.LpProblem, load: ControllableLoad, idx: int, start: datetime, dt: float, n_steps: int
 ) -> list[Expr]:
-    """Run once, uninterrupted, at average power, inside the allowed window."""
+    """Run once per day, uninterrupted, at average power, inside the allowed window."""
     run_steps = math.ceil(load.energy_demand / (load.average_power * dt) - 1e-9)
+    blocked_steps = 0
+    fixed = [0.0] * n_steps
     if load.run_started_at is not None:
         if load.run_started_at.tzinfo is None or load.run_started_at.utcoffset() is None:
             raise ValueError(f"Load {load.id!r} run_started_at must include a timezone offset")
@@ -153,25 +155,30 @@ def add_controllable_load(
             raise ValueError(f"Load {load.id!r} run_started_at cannot be after the optimization timestamp")
         run_end = load.run_started_at + timedelta(hours=run_steps * dt)
         remaining_steps = max(0, math.ceil(_steps_since(start, run_end, dt) - 1e-9))
-        # Once ended, a run started on an earlier day no longer blocks scheduling.
         started_today = load.run_started_at.astimezone(start.tzinfo).date() >= start.date()
-        if remaining_steps > 0 or started_today:
-            return [load.average_power if t < remaining_steps else 0.0 for t in range(n_steps)]
+        fixed = [load.average_power if t < remaining_steps else 0.0 for t in range(n_steps)]
+        if remaining_steps > 0 and not started_today:
+            blocked_steps = n_steps  # run from an earlier day still in progress: no second run
+        elif started_today:
+            next_midnight = (start + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            blocked_steps = max(remaining_steps, math.ceil(_steps_since(start, next_midnight, dt) - 1e-9))
 
-    first = 0
+    first = blocked_steps
     if load.earliest_start_time is not None:
-        first = max(0, math.ceil(_steps_since(start, load.earliest_start_time, dt) - 1e-9))
+        first = max(first, math.ceil(_steps_since(start, load.earliest_start_time, dt) - 1e-9))
     end = n_steps
     if load.latest_finish_time is not None:
         end = min(n_steps, math.floor(_steps_since(start, load.latest_finish_time, dt) + 1e-9))
-    start_steps = range(first, end - run_steps + 1)
+    start_steps = range(max(0, first), end - run_steps + 1)
     if len(start_steps) == 0:
+        if blocked_steps > 0:
+            return fixed
         raise ValueError(f"Load {load.id!r} does not fit in its operating window")
 
     starts = pulp.LpVariable.dicts(f"load{idx}_start", start_steps, cat=pulp.LpBinary)
     prob += pulp.lpSum(starts.values()) == 1
     return [
-        load.average_power * pulp.lpSum(starts[s] for s in start_steps if s <= t < s + run_steps)
+        fixed[t] + load.average_power * pulp.lpSum(starts[s] for s in start_steps if s <= t < s + run_steps)
         for t in range(n_steps)
     ]
 
