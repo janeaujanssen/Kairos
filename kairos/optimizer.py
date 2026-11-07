@@ -606,9 +606,11 @@ def optimize(
 # Helpers
 # ---------------------------------------------------------------------------
 def _check_len(name: str, values: list, n_steps: int) -> None:
-    """Raise if a forecast does not have one value per time step."""
+    """Raise if a forecast does not have one numeric value per time step."""
     if len(values) != n_steps:
         raise ValueError(f"{name} has {len(values)} entries, expected {n_steps}")
+    if any(not isinstance(v, (int, float)) for v in values):
+        raise ValueError(f"{name} must contain only numbers, got null or non-numeric values")
 
 
 def _forecast_series(values: list[float], start: datetime, step_hours: float) -> list[dict]:
