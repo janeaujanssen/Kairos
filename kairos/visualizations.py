@@ -26,11 +26,7 @@ COST_COLORS = {
 
 GRAY = "#7f7f7f"
 
-BTM_MODE_MARKERS = {
-    "charge": ("charge", {"pattern": {"shape": "/"}}),
-    "neutral": ("neutral", {"pattern": {"shape": "x"}}),
-    "discharge": ("discharge", {}),
-}
+BTM_MODE_SYMBOLS = {"charge": "▲", "neutral": "●", "discharge": "▼"}
 
 
 def asset_color(asset_type: str, instance_index: int = 0) -> str:
@@ -135,14 +131,12 @@ def power_flow_chart(
         color = asset_color(asset_type, color_indices[storage_id])
         name = names_by_id.get(storage_id, storage_id)
         if storage_id in modes_by_id:
-            # BTM: one bar series per heat pump mode so the mode is visible in the chart
-            for mode, (label, marker) in BTM_MODE_MARKERS.items():
-                values = [w if m == mode else 0.0 for w, m in zip(storage_schedule_w[storage_id], modes_by_id[storage_id])]
-                marker = dict(color=color, **marker)
-                if "pattern" in marker:
-                    marker["pattern"] = {**marker["pattern"], "bgcolor": color, "fgcolor": "#000000A3"}
-                fig.add_bar(x=timestamps, y=values, name=f"{name} ({label})", marker=marker,
-                            hovertemplate="%{y:.1f} W<extra></extra>")
+            # BTM: one bar per step, marked with a symbol for its heat pump mode
+            modes = modes_by_id[storage_id]
+            fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=name, marker_color=color,
+                        text=[BTM_MODE_SYMBOLS.get(m, "") for m in modes], textposition="inside", insidetextanchor="middle",
+                        textfont=dict(color="#000000A3"), customdata=modes,
+                        hovertemplate="%{y:.1f} W (%{customdata})<extra></extra>")
             continue
         fig.add_bar(x=timestamps, y=storage_schedule_w[storage_id], name=name, marker_color=color,
                     hovertemplate="%{y:.1f} W<extra></extra>")

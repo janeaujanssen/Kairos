@@ -138,7 +138,7 @@ Shows "Optimizing..." spinner while the optimization is in progress.
 - Demand side (stacked bars, barmode="relative"):
   - Base Load
   - Controllable Load
-  - Storage Power per asset. For Building Thermal Mass this is the full heat pump electrical power in each mode (+dT, neutral and -dT), so the bar is never negative. Each BTM bar is split by mode: charge with `/` stripes, discharge in the solid asset color and neutral with `x` stripes, all on the asset color. The stripes are transparent black (`#000000A3`).
+  - Storage Power per asset. For Building Thermal Mass this is the full heat pump electrical power in each mode (+dT, neutral and -dT), so the bar is never negative. Each BTM bar is one solid asset-color bar with a symbol for its mode: charge `▲`, neutral `●`, discharge `▼`. Symbols are transparent black (`#000000A3`). Hover shows the mode next to the power.
 - Secondary y-axis: Import/Export prices [price/kWh] (lines dotted `line_shape="hvh"`)
 
 **Cost Analysis** — Dual-axis hybrid chart:

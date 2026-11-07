@@ -5,6 +5,6 @@ pyyaml
 streamlit
 plotly
 numpy<2.3
-pandas
+pandas<2.3
 requests
 supervisor
