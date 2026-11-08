@@ -1,7 +1,7 @@
 name: Kairos
 slug: kairos
-version: "0.3.0"
-description: Energy scheduling dashboard and optimization API
+version: "0.3.1"
+description: Easy, optimized energy scheduling for Home Assistant
 startup: application
 boot: auto
 init: false
