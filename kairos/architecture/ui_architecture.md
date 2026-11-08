@@ -124,7 +124,7 @@ Shows "Optimizing..." spinner while the optimization is in progress.
 ### Solver Info
 
 **Metrics row**:
-- Status, Solve time, Objective cost
+- Status, Solve time, Objective cost (tooltip: differs from grid energy cost due to remaining storage value, penalties and peak tie-breaker)
 
 **Captions** (below the metrics row):
 - Relative MIP gap target [%]

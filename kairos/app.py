@@ -588,7 +588,11 @@ with tab_opt:
         c1, c2, c3 = st.columns(3)
         c1.metric("Status", data["status"])
         c2.metric("Solve time", f"{result['solve_time']:.2f} s")
-        c3.metric("Objective cost", f"{data['objective_cost']:.2f}")
+        c3.metric(
+            "Objective cost",
+            f"{data['objective_cost']:.2f}",
+            help="Grid energy cost minus remaining storage value, plus penalties and peak tie-breaker. Can differ from grid energy cost.",
+        )
         st.caption(f"Relative MIP gap target: {data.get('relative_mip_gap', 0.0) * 100:.3g}%")
         if data.get("termination_reason"):
             st.caption(f"Termination reason: {data['termination_reason']}")
