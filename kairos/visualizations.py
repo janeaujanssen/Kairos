@@ -51,7 +51,7 @@ def style(fig: go.Figure, y_axis_title: str, height_px: int = 300) -> go.Figure:
     fig.update_layout(
         height=height_px,
         hovermode="x unified",
-        margin=dict(l=10, r=10, t=30, b=10),
+        margin=dict(l=5, r=5, t=30, b=5),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         yaxis_title=y_axis_title,
         paper_bgcolor="white",
@@ -154,14 +154,15 @@ def power_flow_chart(
     export_price_kwh = [p * 1000 for p in export_price]
     fig.add_scatter(x=timestamps, y=import_price_kwh, name="Import price", yaxis="y2", 
                     line=dict(color=COST_COLORS["cost"], dash="dot", width=2), line_shape="hvh",
-                    hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+                    hovertemplate="%{y:.2f} price/kWh<extra></extra>")
     fig.add_scatter(x=timestamps, y=export_price_kwh, name="Export price", yaxis="y2", 
                     line=dict(color=COST_COLORS["profit"], dash="dot", width=2), line_shape="hvh",
-                    hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+                    hovertemplate="%{y:.2f} price/kWh<extra></extra>")
     
     fig.update_layout(
-        barmode="relative", 
-        yaxis2=dict(title="price/kWh", overlaying="y", side="right", showgrid=False)
+        barmode="relative",
+        yaxis=dict(tickformat="~s"),
+        yaxis2=dict(title="price/kWh", overlaying="y", side="right", showgrid=False, tickformat=".2f"),
     )
     return style(fig, "W", 400)
 
@@ -201,8 +202,8 @@ def cost_analysis_chart(
     
 
     fig.update_layout(
-        barmode="relative", 
-        yaxis2=dict(title="cumulative", overlaying="y", side="right", showgrid=False)
+        barmode="relative",
+        yaxis2=dict(title="cumulative", overlaying="y", side="right", showgrid=False, tickformat=".2f"),
     )
     return style(fig, "cost", 350)
 
@@ -258,10 +259,10 @@ def forecast_chart(
         fig = go.Figure()
         fig.add_scatter(x=timestamps, y=import_prices_kwh, name="Import price",
                         line=dict(color=COST_COLORS["cost"]), line_shape="hv",
-                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+                        hovertemplate="%{y:.2f} price/kWh<extra></extra>")
         fig.add_scatter(x=timestamps, y=export_prices_kwh, name="Export price",
                         line=dict(color=COST_COLORS["profit"], dash="solid"), line_shape="hv",
-                        hovertemplate="%{y:.3f} price/kWh<extra></extra>")
+                        hovertemplate="%{y:.2f} price/kWh<extra></extra>")
         return style(fig, "price/kWh")
     if asset_type == "pv":
         return area_chart(timestamps, payload["power_forecast"], "Solar power forecast", asset_color(asset_type, color_index), unit="W")
