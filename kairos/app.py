@@ -410,7 +410,7 @@ def run_optimization(entries: list[tuple[dict, dict, object]]) -> None:
 
     storage = [(a, p, g) for t in STORAGE_TYPES for a, p, g in by_type(t)]
     request = {
-        "timestamp": start.isoformat(),
+        "planning_start": start.isoformat(),
         "time_step_duration": step_h,
         "planning_horizon": horizon_h,
         "solver_time_limit": time_limit_s,
@@ -487,7 +487,7 @@ def refresh_latest_result() -> None:
     result_schedule = latest_response["assets"].get(grid["id"], {}).get("schedule", [])
     result_timestamps = [datetime.fromisoformat(point["time"]) for point in result_schedule]
     if not result_timestamps:
-        fallback_start = datetime.fromisoformat(latest_request["timestamp"])
+        fallback_start = datetime.fromisoformat(latest_request["planning_start"])
         fallback_steps = round(latest_request["planning_horizon"] / result_step_hours)
         result_timestamps = [fallback_start + timedelta(hours=i * result_step_hours) for i in range(fallback_steps)]
 

@@ -80,18 +80,18 @@ components:
     OptimizationRequest:
       type: object
       required:
-        - timestamp
+        - planning_start
         - time_step_duration
         - planning_horizon
         - grid
         - base_load
         - storage
       properties:
-        timestamp:
+        planning_start:
           type: string
           format: date-time
           example: "2026-09-30T14:00:05+02:00"
-          description: ISO 8601 timestamp marking the start of the optimization period.
+          description: ISO 8601 start of the schedule. Forecast values are matched by position, so the first value of each forecast applies to the time step starting here.
         time_step_duration:
           type: number
           format: float
@@ -268,7 +268,7 @@ components:
           example: "07:00"
           description: >-
             Daily earliest allowed start time [HH:MM]. Must be given together with latest_finish_time.
-            The operating window is the next occurrence of [earliest, latest] at or after the optimization timestamp.
+            The operating window is the next occurrence of [earliest, latest] at or after the planning start.
         latest_finish_time:
           type: string
           format: time
@@ -807,18 +807,18 @@ components:
     GenericOptimizationRequest:
       type: object
       required:
-        - timestamp
+        - planning_start
         - time_step_duration
         - planning_horizon
         - grid
         - base_load
         - storage
       properties:
-        timestamp:
+        planning_start:
           type: string
           format: date-time
           example: "2026-09-30T14:00:05+02:00"
-          description: ISO 8601 timestamp marking the start of the optimization period.
+          description: ISO 8601 start of the schedule. Forecast values are matched by position, so the first value of each forecast applies to the time step starting here.
         time_step_duration:
           type: number
           format: float

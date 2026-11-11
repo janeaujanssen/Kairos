@@ -33,7 +33,7 @@ app.openapi = _load_openapi
 
 
 class OptimizationRequest(BaseModel):
-    timestamp: datetime
+    planning_start: datetime
     time_step_duration: float
     planning_horizon: float
     solver_time_limit: int = Field(default=10, ge=1, le=3600)
@@ -120,13 +120,13 @@ def _run(request: OptimizationRequest, storage_converter) -> OptimizationRespons
         sources = [converter.convert_grid(request.grid)]
         sources += [converter.convert_pv(p) for p in request.solar]
         loads = [converter.convert_base_load(request.base_load)]
-        loads += [converter.convert_controllable_load(l, request.timestamp) for l in request.controllable_loads]
+        loads += [converter.convert_controllable_load(l, request.planning_start) for l in request.controllable_loads]
         storage = [storage_converter(s, n_steps) for s in request.storage]
         result = optimizer.optimize(
             sources=sources,
             loads=loads,
             storage=storage,
-            start=request.timestamp,
+            start=request.planning_start,
             step_hours=request.time_step_duration,
             n_steps=n_steps,
             time_limit_s=request.solver_time_limit,
@@ -185,7 +185,7 @@ def run_optimization(request: OptimizationRequest) -> OptimizationResponse:
     return _run(
         request,
         lambda s, n: converter.convert_storage(
-            s, request.timestamp, request.time_step_duration, n
+            s, request.planning_start, request.time_step_duration, n
         ),
     )
 

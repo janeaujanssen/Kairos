@@ -222,7 +222,7 @@ style Backend stroke:#ef4444,color:#ef4444,stroke-width:2px
 
 | Name | Unit | Type | Description |
 |---|---|---|---|
-| Timestamp | timestamp | Request field | Start of the planning horizon. Forecasts are aligned to the time step grid from this time. |
+| Planning Start | timestamp | Request field | Start of the schedule. Together with the Time Step Duration it defines the grid. Forecast values are matched by position: the first value applies to the step starting here. Forecasts are usually anchored to whole hours or quarters, so set this on those boundaries too, e.g. 10:00, 10:15, 10:30. Not snapped to the grid: 10:11 gives steps at 10:11, 10:26, … |
 | Time Step Duration | h | Request field | Converted from Schedule Time Step (min) to hours. |
 | Planning Horizon | h | Request field | ✅ Passed 1:1. |
 | Solver Time Limit | s | Request field | ✅ Passed 1:1. |

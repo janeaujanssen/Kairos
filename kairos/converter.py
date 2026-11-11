@@ -333,7 +333,7 @@ def convert_storage(
 
 def convert_request_storage(request: dict[str, Any]) -> list[Storage]:
     """Convert all storage entries of an `/optimize` request."""
-    start = _parse_dt(request["timestamp"])
+    start = _parse_dt(request["planning_start"])
     step_hours = request["time_step_duration"]
     n_steps = round(request["planning_horizon"] / step_hours)
     return [convert_storage(s, start, step_hours, n_steps) for s in request["storage"]]
